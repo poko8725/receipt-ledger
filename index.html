@@ -364,6 +364,20 @@
   .period-presets button:hover { background: var(--paper-deep); }
   .period-note { margin-top: 9px; font-size: 11.5px; color: var(--muted); }
 
+  /* 請求元ごとのカテゴリ選択。変更はこのブラウザ内にだけ保存される */
+  .cat-select {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--ink-soft);
+    background: var(--paper);
+    border: 1px solid var(--line-soft);
+    border-radius: 3px;
+    padding: 3px 6px;
+    max-width: 120px;
+  }
+  .cat-select:hover { border-color: var(--line); }
+  @media print { .cat-select { border: none; background: none; -webkit-appearance: none; appearance: none; } }
+
   /* ---- 為替 ---- */
   .fx-row {
     display: none;
@@ -725,10 +739,16 @@
       </div>
     </div>
 
+    <div class="section-label">カテゴリ別</div>
+    <table class="ledger" id="categoryTable">
+      <thead><tr><th>カテゴリ</th><th class="num">金額</th><th class="num">件数</th></tr></thead>
+      <tbody id="categoryBody"></tbody>
+    </table>
+
     <div class="section-label">請求元別内訳</div>
     <table class="ledger" id="ledgerTable">
       <thead>
-        <tr><th>請求元</th><th class="num">金額</th><th class="num">件数</th></tr>
+        <tr><th>請求元</th><th>カテゴリ</th><th class="num">金額</th><th class="num">件数</th></tr>
       </thead>
       <tbody id="ledgerBody"></tbody>
     </table>
@@ -1279,6 +1299,60 @@ function titleFromItem(item) {
   return "";
 }
 
+// ============ カテゴリ分け ============
+//
+// 合計は分類しないと判断に使えない。ソシャゲ課金を知りたいのに
+// ふるさと納税や酒が同じ合計に入っていては意味がない。
+//
+// 完全な自動分類は不可能(同じ Apple でもゲーム課金とストレージ料金が混ざる)なので、
+// 分かるものだけ内蔵し、残りは「未分類」に置いて画面上で変更できるようにする。
+// 変更内容はこのブラウザの中だけに保存され、外部には送信されない。
+
+const UNCATEGORIZED = "未分類";
+const CATEGORIES = ["ソシャゲ課金", "ゲーム", "サブスク", "買い物", UNCATEGORIZED];
+
+const CATEGORY_RULES = {
+  "ソシャゲ課金": ["COGNOSPHERE", "原神", "崩壊3rd", "崩壊：スターレイル", "ゼンレスゾーンゼロ",
+    "鳴潮", "パニシング：グレイレイヴン", "ドラゴンクエストウォーク", "Fate/Grand Order",
+    "プリンセスコネクト！Re:Dive", "KURO TECHNOLOGY", "HK KURO GAMES", "Cygames",
+    "Gryph Frontier", "HaoPlay", "N2E ENTERTAINMENT", "miHoYo"],
+  "ゲーム": ["PlayStation", "Nintendo", "Steam", "Epic Games Commerce", "FINAL FANTASY",
+    "英雄伝説", "ゲーム本編"],
+  "サブスク": ["iCloud", "Apple Music", "ファミリー (自動更新)", "YouTube", "Netflix", "Spotify"],
+  "買い物": ["Amazon", "楽天市場", "ヨドバシ", "さとふる", "カクヤス", "アニメイト",
+    "どんぐり共和国", "ピクシブ", "BASE", "Aniplex", "DMM", "Kfc"],
+};
+
+const CATEGORY_STORE = "receipt-ledger:categories";
+
+function loadCategoryOverrides() {
+  try { return JSON.parse(localStorage.getItem(CATEGORY_STORE) || "{}"); }
+  catch (e) { return {}; }
+}
+function saveCategoryOverrides(map) {
+  try { localStorage.setItem(CATEGORY_STORE, JSON.stringify(map)); } catch (e) { /* 保存できなくても動く */ }
+}
+
+let categoryOverrides = loadCategoryOverrides();
+
+function categoryOf(merchant) {
+  if (!merchant) return UNCATEGORIZED;
+  if (categoryOverrides[merchant]) return categoryOverrides[merchant];
+  for (const [category, names] of Object.entries(CATEGORY_RULES)) {
+    for (const name of names) {
+      if (merchant === name || merchant.startsWith(name) || merchant.includes(name)) return category;
+    }
+  }
+  return UNCATEGORIZED;
+}
+
+function setCategory(merchant, category) {
+  if (category === UNCATEGORIZED) delete categoryOverrides[merchant];
+  else categoryOverrides[merchant] = category;
+  saveCategoryOverrides(categoryOverrides);
+  renderResults(lastSkipped);
+}
+
 // 送信元・件名・本文から請求元と品目を決める。CLI 側と同じ順序。
 function resolveMerchant(sender, subject, body) {
   const receipt = parseReceipt(sender, subject, body);
@@ -1351,7 +1425,7 @@ async function handleFiles(fileList) {
     const results = document.getElementById("results");
     results.style.display = "block";
     document.getElementById("ledgerBody").innerHTML =
-      '<tr><td colspan="3" class="empty-note">' +
+      '<tr><td colspan="4" class="empty-note">' +
       `${dropped.length} 件を受け取りましたが、.eml ファイルがありませんでした。<br>` +
       'メールソフトで「書き出す」を実行してできた <b>.eml</b> を指定してください。' +
       '</td></tr>';
@@ -1433,7 +1507,7 @@ function renderResults(skipped) {
     resultsEl.style.display = "block";
     document.getElementById("periodRow").classList.remove("show");
     document.getElementById("ledgerBody").innerHTML =
-      '<tr><td colspan="3" class="empty-note">金額を抽出できたメールがありませんでした。</td></tr>';
+      '<tr><td colspan="4" class="empty-note">金額を抽出できたメールがありませんでした。</td></tr>';
     document.getElementById("totalAmount").textContent = "¥0";
     return;
   }
@@ -1447,7 +1521,7 @@ function renderResults(skipped) {
 
   if (visible.length === 0) {
     document.getElementById("ledgerBody").innerHTML =
-      '<tr><td colspan="3" class="empty-note">この期間に該当するレシートはありません。</td></tr>';
+      '<tr><td colspan="4" class="empty-note">この期間に該当するレシートはありません。</td></tr>';
     document.getElementById("detailList").innerHTML = "";
     document.getElementById("totalAmount").textContent = "¥0";
     document.getElementById("subTotals").innerHTML = "";
@@ -1483,13 +1557,22 @@ function renderResults(skipped) {
   const tbody = document.getElementById("ledgerBody");
   tbody.innerHTML = keys.map(k => {
     const [merchant, currency] = k.split(" ");
+    const cat = categoryOf(merchant);
+    const opts = CATEGORIES.map(c =>
+      `<option value="${escapeHtml(c)}"${c === cat ? " selected" : ""}>${escapeHtml(c)}</option>`).join("");
     return `
     <tr>
       <td><div class="merchant-name"><span class="dot"></span>${escapeHtml(merchant)}</div></td>
+      <td><select class="cat-select" data-merchant="${escapeHtml(merchant)}">${opts}</select></td>
       <td class="num amount">${formatMoney(totals.get(k), currency)}</td>
       <td class="num count">${counts.get(k)}</td>
     </tr>`;
   }).join("");
+
+  renderCategoryTable(visible);
+  document.querySelectorAll(".cat-select").forEach(sel => {
+    sel.addEventListener("change", e => setCategory(e.target.dataset.merchant, e.target.value));
+  });
 
   const detailList = document.getElementById("detailList");
   const sorted = [...visible].sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -1505,6 +1588,31 @@ function renderResults(skipped) {
   if (skipped > 0) notes.push(`${skipped} 件のメールは金額を抽出できずスキップしました`);
   if (lastDuplicated > 0) notes.push(`${lastDuplicated} 件は同じメールの重複として除外しました`);
   skipNote.textContent = notes.join(" / ");
+}
+
+// カテゴリ別の集計。請求元別より先に見せる。判断に使うのはこちらのため。
+function renderCategoryTable(records) {
+  const totals = new Map(), counts = new Map();
+  for (const r of records) {
+    const key = categoryOf(r.merchant) + "\u0000" + r.currency;
+    totals.set(key, (totals.get(key) || 0) + r.amount);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const keys = [...totals.keys()].sort((a, b) => {
+    const ca = a.split("\u0000")[1], cb = b.split("\u0000")[1];
+    return ca === cb ? totals.get(b) - totals.get(a) : ca.localeCompare(cb);
+  });
+  // 通貨が複数あると同じカテゴリ名が2行並ぶので、そのときだけ通貨を添える
+  const multiCurrency = new Set(records.map(r => r.currency)).size > 1;
+  document.getElementById("categoryBody").innerHTML = keys.map(k => {
+    const [category, currency] = k.split("\u0000");
+    const label = multiCurrency ? `${category}（${currency}）` : category;
+    return `<tr>
+      <td><div class="merchant-name"><span class="dot"></span>${escapeHtml(label)}</div></td>
+      <td class="num amount">${formatMoney(totals.get(k), currency)}</td>
+      <td class="num count">${counts.get(k)}</td>
+    </tr>`;
+  }).join("");
 }
 
 // 通貨ごとの総額を出す。1つの数字にまとめることは絶対にしない。
@@ -1571,7 +1679,7 @@ document.getElementById("exportSummary").addEventListener("click", () => {
     totals.set(key, (totals.get(key) || 0) + r.amount);
     counts.set(key, (counts.get(key) || 0) + 1);
   }
-  const rows = [["請求元", "通貨", "合計金額", "件数", "平均単価"]];
+  const rows = [["カテゴリ", "請求元", "通貨", "合計金額", "件数", "平均単価"]];
   [...totals.keys()]
     .sort((a, b) => {
       const [, ca] = a.split(" "), [, cb] = b.split(" ");
@@ -1581,15 +1689,15 @@ document.getElementById("exportSummary").addEventListener("click", () => {
       const [merchant, currency] = k.split(" ");
       const total = totals.get(k), count = counts.get(k);
       const round = v => currency === "JPY" ? Math.round(v) : Number(v.toFixed(2));
-      rows.push([merchant, currency, round(total), count, round(total / count)]);
+      rows.push([categoryOf(merchant), merchant, currency, round(total), count, round(total / count)]);
     });
   downloadCsv("summary.csv", rows);
 });
 
 document.getElementById("exportDetail").addEventListener("click", () => {
-  const rows = [["日付", "請求元", "品目", "通貨", "金額", "送信元", "件名", "ファイル"]];
+  const rows = [["日付", "カテゴリ", "請求元", "品目", "通貨", "金額", "送信元", "件名", "ファイル"]];
   [...visibleRecords()].sort((a, b) => (a.date > b.date ? 1 : -1)).forEach(r => {
-    rows.push([r.date, r.merchant, r.item || "", r.currency, r.amount, r.sender, r.subject, r.file]);
+    rows.push([r.date, categoryOf(r.merchant), r.merchant, r.item || "", r.currency, r.amount, r.sender, r.subject, r.file]);
   });
   downloadCsv("detail.csv", rows);
 });
@@ -1831,7 +1939,7 @@ function showDropHelp() {
   const results = document.getElementById("results");
   results.style.display = "block";
   document.getElementById("ledgerBody").innerHTML =
-    '<tr><td colspan="3" class="empty-note">' +
+    '<tr><td colspan="4" class="empty-note">' +
     'ファイルとして受け取れませんでした。<br>' +
     'メールソフトから直接ドラッグした場合は読み込めません。' +
     '一度フォルダに <b>.eml</b> で書き出してから、そのファイルをドロップしてください。' +

@@ -309,3 +309,46 @@ def canonicalize_merchants(names: list[str]) -> dict[str, str]:
             break
         mapping[name] = target
     return mapping
+
+
+# ---- 請求元のカテゴリ分け ----
+#
+# 「いくら使ったか」は分類しないと判断に使えない。ソシャゲ課金を知りたいのに
+# ふるさと納税や酒が同じ合計に入っていては意味がない。
+#
+# 完全な自動分類は不可能(同じ Apple でもゲーム課金とストレージ料金が混ざる)なので、
+# 分かるものだけ内蔵し、残りは「未分類」に置く。
+# ブラウザ版では画面上で変更でき、その設定はブラウザ内にだけ保存される。
+UNCATEGORIZED = "未分類"
+
+CATEGORY_RULES: dict[str, tuple[str, ...]] = {
+    "ソシャゲ課金": (
+        "COGNOSPHERE", "原神", "崩壊3rd", "崩壊：スターレイル", "ゼンレスゾーンゼロ",
+        "鳴潮", "パニシング：グレイレイヴン", "ドラゴンクエストウォーク",
+        "Fate/Grand Order", "プリンセスコネクト！Re:Dive",
+        "KURO TECHNOLOGY", "HK KURO GAMES", "Cygames", "Gryph Frontier",
+        "HaoPlay", "N2E ENTERTAINMENT", "miHoYo",
+    ),
+    "ゲーム": (
+        "PlayStation", "Nintendo", "Steam", "Epic Games Commerce", "FINAL FANTASY",
+        "英雄伝説", "ゲーム本編",
+    ),
+    "サブスク": (
+        "iCloud", "Apple Music", "ファミリー (自動更新)", "YouTube", "Netflix", "Spotify",
+    ),
+    "買い物": (
+        "Amazon", "楽天市場", "ヨドバシ", "さとふる", "カクヤス", "アニメイト",
+        "どんぐり共和国", "ピクシブ", "BASE", "Aniplex", "DMM", "Kfc",
+    ),
+}
+
+
+def category_of(merchant: str) -> str:
+    """請求元からカテゴリを引く。前方一致と部分一致で拾い、外れたら未分類。"""
+    if not merchant:
+        return UNCATEGORIZED
+    for category, names in CATEGORY_RULES.items():
+        for name in names:
+            if merchant == name or merchant.startswith(name) or name in merchant:
+                return category
+    return UNCATEGORIZED

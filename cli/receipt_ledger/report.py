@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .analyze import Record
-from .rules import format_money
+from .rules import category_of, format_money
 
 
 def totals_by_merchant(
@@ -31,6 +31,23 @@ def totals_by_merchant(
     return dict(totals), dict(counts)
 
 
+def totals_by_category(
+    records: Iterable[Record],
+) -> tuple[dict[tuple[str, str], Decimal], dict[tuple[str, str], int]]:
+    """(カテゴリ, 通貨) 単位で集計する。
+
+    合計は分類しないと判断に使えない。請求元別の内訳より、
+    まずこちらを見たい場面のほうが多い。
+    """
+    totals: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    for r in records:
+        key = (category_of(r.merchant), r.currency)
+        totals[key] += r.amount
+        counts[key] += 1
+    return dict(totals), dict(counts)
+
+
 def grand_totals(records: Iterable[Record]) -> dict[str, Decimal]:
     """通貨ごとの総額。1つの数字にはまとめない。"""
     out: dict[str, Decimal] = defaultdict(Decimal)
@@ -44,20 +61,22 @@ def write_summary_csv(path: Path, records: list[Record]) -> None:
     # Excel が UTF-8 と認識できるよう BOM 付きにする
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
-        w.writerow(["請求元", "通貨", "合計金額", "件数", "平均単価"])
+        w.writerow(["カテゴリ", "請求元", "通貨", "合計金額", "件数", "平均単価"])
         for (merchant, currency) in sorted(totals, key=lambda k: (k[1], -totals[k])):
             total, count = totals[(merchant, currency)], counts[(merchant, currency)]
-            w.writerow([merchant, currency, total, count, (total / count).quantize(total)])
+            w.writerow([category_of(merchant), merchant, currency, total, count,
+                        (total / count).quantize(total)])
 
 
 def write_detail_csv(path: Path, records: list[Record]) -> None:
-    header = ["日付", "請求元", "品目", "通貨", "金額", "送信元", "件名", "メールボックス", "出所"]
+    header = ["日付", "カテゴリ", "請求元", "品目", "通貨", "金額", "送信元", "件名", "メールボックス", "出所"]
     fields = ["date", "merchant", "item", "currency", "amount", "sender", "subject", "mailbox", "origin"]
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(header)
         for r in sorted(records, key=lambda x: x.date):
-            w.writerow([getattr(r, k) for k in fields])
+            row = [getattr(r, k) for k in fields]
+            w.writerow([row[0], category_of(r.merchant)] + row[1:])
 
 
 def _width(s: str) -> int:
@@ -91,6 +110,17 @@ def print_summary(records: list[Record], scanned: int, skipped: int,
     if len(grands) > 1:
         print("(通貨が混在しています。通貨をまたぐ合計は出しません)", file=sys.stderr)
     print("", file=sys.stderr)
+
+    # 請求元別より先にカテゴリ別を出す。判断に使うのはこちらのため。
+    cat_totals, cat_counts = totals_by_category(records)
+    if len(set(c for c, _ in cat_totals)) > 1:
+        cat_w = max([_width(c) for c, _ in cat_totals] + [_width("カテゴリ")])
+        print(f"{_pad('カテゴリ', cat_w)}  {_rpad('合計金額', 14)}  {_rpad('件数', 6)}", file=sys.stderr)
+        print("-" * (cat_w + 24), file=sys.stderr)
+        for key in sorted(cat_totals, key=lambda k: (k[1], -cat_totals[k])):
+            print(f"{_pad(key[0], cat_w)}  {_rpad(format_money(cat_totals[key], key[1]), 14)}  "
+                  f"{_rpad(str(cat_counts[key]), 6)}", file=sys.stderr)
+        print("", file=sys.stderr)
 
     name_w = max([_width(m) for m, _ in totals] + [_width("請求元")])
     amount_w, count_w = 14, 6
