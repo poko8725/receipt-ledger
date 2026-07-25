@@ -30,6 +30,9 @@ import run_js  # noqa: E402
 import run_py  # noqa: E402
 from compare import diff_case  # noqa: E402
 
+sys.path.insert(0, str(HERE.parent / "cli"))
+from receipt_ledger.console import enable_utf8_output  # noqa: E402
+
 # (名前, 説明, 置換前, 置換後)
 # 置換前が見つからなければその場で止める。コードが動いたのに気づかず
 # 「検知できません」と報告するほうが害が大きい。
@@ -107,6 +110,7 @@ def run_browser(core: str) -> dict:
 
 
 def main() -> None:
+    enable_utf8_output()
     core = run_js.extract_core()
     truth = run_py.run()
 
@@ -126,7 +130,7 @@ def main() -> None:
             if diff_case(broken.get(fixture), truth.get(fixture))
         ]
         mark = "検知" if caught else "見逃し"
-        print(f"[{mark}] {name} — {why}")
+        print(f"[{mark}] {name} - {why}")
         for fixture in caught:
             print(f"           {fixture}")
         if not caught:

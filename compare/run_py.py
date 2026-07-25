@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "cli"))
 
 from receipt_ledger.analyze import analyze  # noqa: E402
+from receipt_ledger.console import enable_utf8_output  # noqa: E402
 from receipt_ledger.sources.base import RawMessage  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -54,5 +55,6 @@ def run() -> dict[str, dict | None]:
 
 
 if __name__ == "__main__":
+    enable_utf8_output()
     json.dump(run(), sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

@@ -27,11 +27,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "cli"))
 
 from receipt_ledger.analyze import analyze  # noqa: E402
+from receipt_ledger.console import enable_utf8_output  # noqa: E402
 from receipt_ledger.rules import category_of  # noqa: E402
 from receipt_ledger.sources import AppleMailSource, EmlDirSource, SourceUnavailable  # noqa: E402
 
 
 def main() -> None:
+    enable_utf8_output()
     ap = argparse.ArgumentParser(description="日付のタイムゾーン差の影響件数を数える")
     ap.add_argument("--input-dir", help="書き出し済みの .eml が入ったフォルダ")
     ap.add_argument("--category", help="このカテゴリだけに絞る（例: ソシャゲ課金）")

@@ -33,6 +33,9 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'cli'))
+from receipt_ledger.console import enable_utf8_output  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -150,6 +153,7 @@ def read_dom(command: list[str], deadline_sec: float = 60.0) -> str:
 
 
 def main() -> None:
+    enable_utf8_output()
     page = build_page(extract_core())
 
     # ヘッドレスが動かない環境(CI のサンドボックス等)向けの逃げ道。

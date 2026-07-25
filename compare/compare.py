@@ -18,12 +18,27 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
+sys.path.insert(0, str(HERE.parent / "cli"))
+from receipt_ledger.console import enable_utf8_output  # noqa: E402
 FIELDS = ["subject", "sender", "merchant", "item", "amount", "currency", "date"]
+
+
+def _utf8_env() -> dict:
+    """子プロセスの出力を UTF-8 に固定する。
+
+    text=True の復号はロケール既定（Windows なら cp932）で行われるため、
+    encoding を明示しないと親側で UnicodeDecodeError になる。
+    子の出力側も揃えておかないと、そもそも cp932 のバイト列が飛んでくる。
+    """
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
 
 
 def load_js() -> dict:
@@ -35,7 +50,7 @@ def load_js() -> dict:
             text = base64.b64decode(text).decode("utf-8")
         return json.loads(text)
     proc = subprocess.run(
-        [sys.executable, str(HERE / "run_js.py")], capture_output=True, text=True
+        [sys.executable, str(HERE / "run_js.py")], capture_output=True, text=True, encoding="utf-8", env=_utf8_env()
     )
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
@@ -45,7 +60,7 @@ def load_js() -> dict:
 
 def load_py() -> dict:
     proc = subprocess.run(
-        [sys.executable, str(HERE / "run_py.py")], capture_output=True, text=True
+        [sys.executable, str(HERE / "run_py.py")], capture_output=True, text=True, encoding="utf-8", env=_utf8_env()
     )
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
@@ -71,6 +86,7 @@ def diff_case(js: dict | None, py: dict | None) -> list[tuple[str, object, objec
 
 
 def main() -> None:
+    enable_utf8_output()
     js, py = load_js(), load_py()
 
     names = sorted(set(js) | set(py))

@@ -21,15 +21,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "cli"))
 
+from receipt_ledger.console import enable_utf8_output  # noqa: E402
+
 results: list[tuple[bool, str, str]] = []
 
 
 def check(ok: bool, name: str, detail: str = "") -> None:
     results.append((ok, name, detail))
-    print(f"[{'OK' if ok else 'NG'}] {name}" + (f" — {detail}" if detail else ""))
+    print(f"[{'OK' if ok else 'NG'}] {name}" + (f" - {detail}" if detail else ""))
 
 
 def main() -> None:
+    enable_utf8_output()
     print(f"OS      : {platform.system()} {platform.release()}")
     print(f"Python  : {sys.version.split()[0]}")
     print(f"文字コード: stdout={sys.stdout.encoding} / fs={sys.getfilesystemencoding()}")
@@ -71,6 +74,14 @@ def main() -> None:
             failed.append(f"{path.name}({e})")
     check(parsed > 0 and not failed, f".eml の解析（{parsed} 件成功）",
           "失敗: " + ", ".join(failed) if failed else "")
+
+    # cp932 のコンソールでは ¥ も em dash も encode できず、表示の一箇所で全体が止まる。
+    # enable_utf8_output() が効いていることを、実際に出力して確かめる。
+    try:
+        print("     出力テスト: ¥1,780 / $43.00 / EUR")
+        check(True, "金額記号を含む出力")
+    except UnicodeEncodeError as e:
+        check(False, "金額記号を含む出力", f"{e} — enable_utf8_output() が効いていない")
 
     # ISO-2022-JP の復号は環境依存で落ちることがある
     try:

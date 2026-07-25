@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from .analyze import Record, analyze
+from .console import enable_utf8_output
 from .report import print_summary, write_detail_csv, write_summary_csv
 from .rules import canonicalize_merchants
 from .sources import SOURCES, AppleMailSource, EmlDirSource, SourceUnavailable
@@ -98,6 +99,8 @@ def collect(source, args) -> tuple[list[Record], int, int, int, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows の cp932 コンソールでは金額の ¥ が出力できず、表示で落ちる。
+    enable_utf8_output()
     args = parse_args(argv)
     source = build_source(args)
 
