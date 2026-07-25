@@ -1,0 +1,1868 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>受取帳 — レシートメール集計</title>
+<!-- 「メールの内容を外部に出さない」をブラウザ側で強制する。
+     default-src 'none' が基本。connect-src だけは為替レート配信元1つに限定して開けている。
+     ここに書かれた1ホスト以外へは、コードが何をしようとブラウザが通信を拒否する。
+     メール本文・件名・送信元がこの経路に乗ることはない(送るのは通貨コードのみ)。 -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src https://api.frankfurter.dev; form-action 'none'; base-uri 'none'">
+<style>
+  :root {
+    /* 外部フォントは読み込まない（1件も通信を発生させないため）。
+       OS 同梱のフォントだけで組む。 */
+    --font-serif: "Hiragino Mincho ProN", "Yu Mincho", YuMincho, "Noto Serif JP", serif;
+    --font-sans: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", YuGothic, "Noto Sans JP", sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    --paper: #E8E1CF;
+    --paper-deep: #DED5BE;
+    --card: #F6F1E4;
+    --line: #B9AD8E;
+    --line-soft: #D3C7A9;
+    --ink: #24211B;
+    --ink-soft: #5B5647;
+    --muted: #857F6C;
+    --indigo: #1B4863;
+    --indigo-deep: #123549;
+    --stamp: #9F2A20;
+    --stamp-deep: #7C1F17;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(90,80,50,0.05) 28px);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 48px 20px 80px;
+  }
+
+  .sheet {
+    width: 100%;
+    max-width: 700px;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 36px;
+  }
+
+  .eyebrow {
+    font-size: 12px;
+    letter-spacing: 0.3em;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  h1 {
+    font-family: var(--font-serif);
+    font-weight: 700;
+    font-size: 40px;
+    margin: 0 0 8px;
+    color: var(--indigo-deep);
+    letter-spacing: 0.08em;
+  }
+
+  .sub {
+    font-size: 14px;
+    color: var(--ink-soft);
+    line-height: 1.7;
+  }
+
+  /* label は既定が display:inline。中にブロック要素を置くとインラインボックスが
+     分断され、枠線が細い帯になって当たり判定も壊れる。block 指定は必須。 */
+  .dropzone {
+    display: block;
+    position: relative;
+    border: 2px dashed var(--line);
+    border-radius: 4px;
+    background: var(--card);
+    padding: 52px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+  .dropzone::before, .dropzone::after {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 1.5px solid var(--line);
+  }
+  .dropzone::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .dropzone::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+  .dropzone.drag-over {
+    border-color: var(--indigo);
+    background: #EFE9D8;
+  }
+
+  .dropzone .icon {
+    font-size: 28px;
+    margin-bottom: 12px;
+    color: var(--indigo);
+  }
+
+  .dropzone .title {
+    font-family: var(--font-serif);
+    font-size: 18px;
+    margin-bottom: 6px;
+    color: var(--ink);
+  }
+
+  .dropzone .hint {
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  .dropzone input[type=file] { display: none; }
+
+  .privacy-note {
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 14px;
+    letter-spacing: 0.02em;
+  }
+  .privacy-note b { color: var(--ink-soft); }
+
+  /* ---- 使い方 ---- */
+  .howto {
+    background: var(--card);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 20px 24px 22px;
+    margin-bottom: 20px;
+  }
+  .howto h2 {
+    font-family: var(--font-serif);
+    font-size: 14px;
+    letter-spacing: 0.12em;
+    color: var(--indigo-deep);
+    margin: 0 0 14px;
+    font-weight: 700;
+  }
+  .howto ol { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+  .howto li {
+    counter-increment: step;
+    position: relative;
+    padding-left: 30px;
+    margin-bottom: 11px;
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: var(--ink-soft);
+  }
+  .howto li:last-child { margin-bottom: 0; }
+  .howto li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 1px;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--indigo);
+    color: var(--card);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .howto kbd {
+    font-family: var(--font-sans);
+    background: var(--paper-deep);
+    border: 1px solid var(--line-soft);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 12.5px;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .howto .aside {
+    margin-top: 14px;
+    padding-top: 13px;
+    border-top: 1px dotted var(--line-soft);
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  .try-row {
+    text-align: center;
+    margin-top: 14px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .try-row button {
+    background: none;
+    border: none;
+    color: var(--indigo);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    padding: 4px;
+  }
+  .try-row button:hover { color: var(--indigo-deep); }
+
+  /* ページ全体をドロップ受け口にしたときの覆い */
+  #overlay {
+    position: fixed; inset: 0;
+    background: rgba(27,72,99,0.10);
+    border: 3px dashed var(--indigo);
+    display: none;
+    align-items: center; justify-content: center;
+    font-family: var(--font-serif);
+    font-size: 22px;
+    color: var(--indigo-deep);
+    z-index: 50;
+    pointer-events: none;
+  }
+  #overlay.show { display: flex; }
+
+  .sample-banner {
+    display: none;
+    background: #F0E6C8;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 10px 14px;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    margin-bottom: 20px;
+    text-align: center;
+  }
+  .sample-banner.show { display: block; }
+
+  /* ---- 進捗 ----
+     1000通規模だと解析に数分かかる。何も出さないと固まったように見えるため、
+     件数とバーを必ず出す。 */
+  .progress {
+    display: none;
+    margin-top: 20px;
+    background: var(--card);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 16px 18px;
+  }
+  .progress.show { display: block; }
+  .progress-label {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink);
+    margin-bottom: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .progress-track {
+    height: 6px;
+    background: var(--paper-deep);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--indigo);
+    transition: width 0.15s linear;
+  }
+  .progress-note {
+    margin-top: 10px;
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  #results { margin-top: 40px; display: none; }
+
+  .total-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    margin-bottom: 36px;
+    position: relative;
+  }
+
+  .total-text {
+    text-align: right;
+  }
+  .total-label {
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .total-amount {
+    font-family: var(--font-mono);
+    font-size: 34px;
+    font-weight: 600;
+    color: var(--indigo-deep);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sub-totals {
+    margin-top: 6px;
+    font-family: var(--font-mono);
+    font-size: 17px;
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+  }
+  .sub-totals .converted {
+    display: block;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 5px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ---- 期間絞り ---- */
+  .period-row {
+    display: none;
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    background: var(--card);
+    padding: 12px 16px;
+    margin-bottom: 20px;
+  }
+  .period-row.show { display: block; }
+  .period-controls {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--ink-soft);
+  }
+  .period-label { letter-spacing: 0.1em; color: var(--muted); }
+  .period-sep { color: var(--muted); }
+  .period-row input[type=date] {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    padding: 5px 8px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .period-presets { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .period-presets button {
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    color: var(--indigo);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  .period-presets button:hover { background: var(--paper-deep); }
+  .period-note { margin-top: 9px; font-size: 11.5px; color: var(--muted); }
+
+  /* ---- 為替 ---- */
+  .fx-row {
+    display: none;
+    background: var(--card);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 14px 16px;
+    margin-bottom: 28px;
+  }
+  .fx-row.show { display: block; }
+  .fx-lead { font-size: 13px; color: var(--ink-soft); margin-bottom: 10px; }
+  .fx-controls {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--ink-soft);
+  }
+  .fx-controls button {
+    background: var(--indigo); color: var(--card);
+    border: none; border-radius: 3px;
+    padding: 8px 14px; font-family: var(--font-sans); font-size: 12.5px;
+    cursor: pointer;
+  }
+  .fx-controls button:hover { background: var(--indigo-deep); }
+  .fx-controls button:disabled { background: var(--muted); cursor: default; }
+  .fx-or { color: var(--muted); }
+  .fx-manual input {
+    width: 74px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    padding: 5px 7px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .fx-note {
+    margin-top: 10px; font-size: 11.5px; color: var(--muted); line-height: 1.6;
+  }
+  .fx-note.error { color: var(--stamp); }
+
+  .stamp {
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    border: 3px solid var(--stamp);
+    color: var(--stamp);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    font-family: var(--font-serif);
+    font-weight: 700;
+    transform: rotate(-8deg) scale(0.4);
+    opacity: 0;
+    box-shadow: inset 0 0 0 3px rgba(159,42,32,0.15);
+    flex-shrink: 0;
+  }
+  .stamp.show {
+    animation: stampIn 0.5s cubic-bezier(.2,1.4,.4,1) 0.15s forwards;
+  }
+  .stamp .kanji { font-size: 20px; line-height: 1; }
+  .stamp .sub-kanji { font-size: 10px; letter-spacing: 0.15em; margin-top: 2px; }
+
+  @keyframes stampIn {
+    0%   { transform: rotate(-8deg) scale(2.2); opacity: 0; }
+    60%  { transform: rotate(-8deg) scale(0.92); opacity: 1; }
+    100% { transform: rotate(-8deg) scale(1); opacity: 1; }
+  }
+
+  .section-label {
+    font-family: var(--font-serif);
+    font-size: 14px;
+    color: var(--indigo-deep);
+    letter-spacing: 0.15em;
+    margin: 0 0 10px 2px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-label::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line-soft);
+  }
+
+  table.ledger {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 30px;
+  }
+  table.ledger th {
+    text-align: left;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    font-weight: 500;
+    padding: 0 10px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.ledger th.num, table.ledger td.num { text-align: right; }
+  table.ledger td {
+    padding: 12px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 14.5px;
+  }
+  table.ledger td.amount {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  table.ledger td.count {
+    font-family: var(--font-mono);
+    color: var(--muted);
+  }
+  table.ledger tr:last-child td { border-bottom: 1px solid var(--line); }
+
+  .merchant-name { display: flex; align-items: center; gap: 8px; }
+  .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--indigo);
+    flex-shrink: 0;
+  }
+
+  details.detail-toggle {
+    margin-top: -6px;
+  }
+  details.detail-toggle summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--indigo);
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+  }
+  details.detail-toggle summary::-webkit-details-marker { display: none; }
+  details.detail-toggle summary::before {
+    content: "▸";
+    font-size: 10px;
+    transition: transform 0.15s ease;
+  }
+  details.detail-toggle[open] summary::before { transform: rotate(90deg); }
+
+  .detail-list { margin-top: 14px; }
+  .detail-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 2px;
+    border-bottom: 1px dotted var(--line-soft);
+    font-size: 13px;
+  }
+  .detail-item .left { color: var(--ink-soft); }
+  .detail-item .left .date { color: var(--muted); font-family: var(--font-mono); font-size: 11.5px; margin-right: 8px; }
+  .detail-item .right { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  .export-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  button.export-btn {
+    flex: 1;
+    background: var(--indigo);
+    color: #F6F1E4;
+    border: none;
+    border-radius: 3px;
+    padding: 12px;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button.export-btn:hover { background: var(--indigo-deep); }
+  button.export-btn.secondary {
+    background: transparent;
+    color: var(--indigo);
+    border: 1px solid var(--indigo);
+  }
+  button.export-btn.secondary:hover { background: rgba(27,72,99,0.08); }
+
+  .skip-note {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 22px;
+  }
+
+  .empty-note {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 20px 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stamp.show { animation: none; opacity: 1; transform: rotate(-8deg) scale(1); }
+  }
+
+  /* ---- 印刷 / PDF 保存 ----
+     PDF 生成ライブラリは使わない。日本語 PDF はフォント埋め込みが必須で
+     数MBになり、「HTML1枚・通信ゼロ」という前提と両立しないため。
+     ブラウザの印刷機能(Chrome なら「PDFに保存」)に流す。 */
+  .print-meta { display: none; }
+
+  @media print {
+    @page { margin: 16mm 14mm; }
+
+    body {
+      background: #fff;
+      background-image: none;
+      color: #000;
+      display: block;
+      padding: 0;
+      min-height: 0;
+    }
+    .sheet { max-width: none; width: 100%; }
+
+    /* 操作用の要素は紙に出さない */
+    .howto, .dropzone, .try-row, .privacy-note, .export-row,
+    .period-controls, .fx-row, #overlay, .skip-note, details.detail-toggle summary {
+      display: none !important;
+    }
+
+    header { margin-bottom: 18px; }
+    .eyebrow { color: #666; }
+    h1 { color: #000; font-size: 28px; }
+    .sub { display: none; }
+
+    .print-meta {
+      display: block;
+      text-align: center;
+      font-size: 11px;
+      color: #555;
+      margin-bottom: 24px;
+    }
+
+    #results { display: block !important; margin-top: 0; }
+    .total-amount { color: #000; }
+    .section-label { color: #000; }
+
+    /* 明細は折りたたまれていても紙には出す */
+    details.detail-toggle { display: block; }
+    .detail-list { margin-top: 0; }
+
+    table.ledger { page-break-inside: auto; }
+    table.ledger tr, .detail-item { page-break-inside: avoid; }
+    thead { display: table-header-group; }
+
+    .period-row.show { border: none; background: none; padding: 0; margin-bottom: 8px; }
+    .period-note { color: #555; text-align: center; }
+
+    .sample-banner.show {
+      background: none;
+      border: 1px solid #999;
+      color: #333;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="eyebrow">RECEIPT LEDGER</div>
+    <h1>受取帳</h1>
+    <div class="sub">レシートメールを読み込んで、支出を請求元別に集計します。<br>すべてこのブラウザの中だけで処理されます。</div>
+  </header>
+
+  <div class="howto">
+    <h2>使い方</h2>
+    <ol>
+      <li>デスクトップなどに空のフォルダを1つ作る</li>
+      <li>Mail.app で集計したいレシートメールを選び（<kbd>⌘A</kbd> で全選択できます）、
+          <b>そのフォルダへドラッグする</b> — 1通につき1つ <kbd>.eml</kbd> ができます</li>
+      <li>できた <kbd>.eml</kbd> を、下の枠にまとめてドロップする</li>
+    </ol>
+    <div class="aside">
+      Mail.app から<b>ブラウザへ直接ドラッグしても読み込めません</b>。ブラウザ側がファイルとして
+      受け取れないためです。いったん Finder のフォルダを経由してください。<br>
+      <kbd>ファイル</kbd> → <kbd>別名で保存…</kbd> でも保存できますが、1通ずつになるため
+      まとめて処理するならドラッグのほうが速いです。
+    </div>
+  </div>
+
+  <label class="dropzone" id="dropzone">
+    <div class="icon">✉</div>
+    <div class="title">ここに .eml ファイルをドロップ</div>
+    <div class="hint">クリックしてファイルを選ぶこともできます（複数選択可）</div>
+    <input type="file" id="fileInput" multiple accept=".eml,message/rfc822">
+  </label>
+  <div class="try-row">
+    書き出しの前に動きを見たい場合は <button type="button" id="loadSample">サンプルデータで試す</button>
+  </div>
+  <div class="privacy-note">
+    <b>メールの内容は一切外部に送信されません。</b>解析はすべてこの画面の中で完結します。<br>
+    外部と通信するのは「最新レートを取得」を押したときだけで、送るのは通貨コードのみです。
+  </div>
+
+  <div id="overlay">ドロップして読み込む</div>
+
+  <div class="progress" id="progress">
+    <div class="progress-label" id="progressLabel">読み込み中…</div>
+    <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="progress-note">解析はこの画面の中だけで行われます。件数が多いと数分かかることがあります。</div>
+  </div>
+
+  <div id="results">
+    <div class="sample-banner" id="sampleBanner">
+      これはサンプルデータの表示です。実際のメールではありません。
+    </div>
+    <div class="print-meta" id="printMeta"></div>
+    <div class="total-row">
+      <div class="total-text">
+        <div class="total-label">合計金額</div>
+        <div class="total-amount" id="totalAmount">¥0</div>
+        <div class="sub-totals" id="subTotals"></div>
+      </div>
+      <div class="stamp" id="stamp">
+        <div class="kanji">検</div>
+        <div class="sub-kanji">済</div>
+      </div>
+    </div>
+
+    <div class="period-row" id="periodRow">
+      <div class="period-controls">
+        <span class="period-label">期間</span>
+        <input type="date" id="periodFrom" aria-label="開始日">
+        <span class="period-sep">〜</span>
+        <input type="date" id="periodTo" aria-label="終了日">
+        <span class="period-presets">
+          <button type="button" data-preset="thisMonth">今月</button>
+          <button type="button" data-preset="lastMonth">先月</button>
+          <button type="button" data-preset="thisYear">今年</button>
+          <button type="button" data-preset="all">全期間</button>
+        </span>
+      </div>
+      <div class="period-note" id="periodNote"></div>
+    </div>
+
+    <div class="fx-row" id="fxRow">
+      <div class="fx-lead">
+        外貨が含まれています。円に換算する場合はレートを取得してください。
+      </div>
+      <div class="fx-controls">
+        <button type="button" id="fetchRate">最新レートを取得して円換算</button>
+        <span class="fx-or">または</span>
+        <label class="fx-manual">
+          1 USD =
+          <input type="number" id="manualRate" min="0" step="0.01" placeholder="150">
+          円で計算
+        </label>
+      </div>
+      <div class="fx-note" id="fxNote">
+        レート取得はこのボタンを押したときだけ行われます。送信するのは通貨コードのみで、
+        メールの内容は一切含まれません。
+      </div>
+    </div>
+
+    <div class="section-label">請求元別内訳</div>
+    <table class="ledger" id="ledgerTable">
+      <thead>
+        <tr><th>請求元</th><th class="num">金額</th><th class="num">件数</th></tr>
+      </thead>
+      <tbody id="ledgerBody"></tbody>
+    </table>
+
+    <details class="detail-toggle">
+      <summary>明細を見る</summary>
+      <div class="detail-list" id="detailList"></div>
+    </details>
+
+    <div class="export-row">
+      <button class="export-btn" id="exportSummary">サマリーCSVを書き出す</button>
+      <button class="export-btn secondary" id="exportDetail">明細CSVを書き出す</button>
+      <button class="export-btn secondary" id="exportPdf">PDFで保存</button>
+    </div>
+
+    <div class="skip-note" id="skipNote"></div>
+  </div>
+</div>
+
+<script>
+// ============ MIME / eml パース ============
+
+function decodeMimeWord(str) {
+  if (!str) return "";
+  const re = /=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi;
+  return str.replace(re, (_, charset, enc, text) => {
+    try {
+      if (enc.toUpperCase() === "B") {
+        const bin = atob(text.replace(/\s/g, ""));
+        const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+        return new TextDecoder(charset).decode(bytes);
+      } else {
+        const withSpaces = text.replace(/_/g, " ");
+        const bytes = [];
+        for (let i = 0; i < withSpaces.length; i++) {
+          if (withSpaces[i] === "=" && /[0-9A-Fa-f]{2}/.test(withSpaces.substr(i + 1, 2))) {
+            bytes.push(parseInt(withSpaces.substr(i + 1, 2), 16));
+            i += 2;
+          } else {
+            bytes.push(withSpaces.charCodeAt(i));
+          }
+        }
+        return new TextDecoder(charset).decode(Uint8Array.from(bytes));
+      }
+    } catch (e) { return text; }
+  });
+}
+
+function decodeQuotedPrintable(str, charset) {
+  const bytes = [];
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (c === "=" && str[i + 1] === "\r" && str[i + 2] === "\n") { i += 2; }
+    else if (c === "=" && str[i + 1] === "\n") { i += 1; }
+    else if (c === "=" && /[0-9A-Fa-f]{2}/.test(str.substr(i + 1, 2))) {
+      bytes.push(parseInt(str.substr(i + 1, 2), 16));
+      i += 2;
+    } else { bytes.push(c.charCodeAt(0) & 0xff); }
+  }
+  try { return new TextDecoder(charset || "utf-8").decode(Uint8Array.from(bytes)); }
+  catch { return new TextDecoder("utf-8").decode(Uint8Array.from(bytes)); }
+}
+
+function decodeBase64(str, charset) {
+  try {
+    const clean = str.replace(/[\r\n\s]/g, "");
+    const bin = atob(clean);
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    return new TextDecoder(charset || "utf-8").decode(bytes);
+  } catch { return ""; }
+}
+
+// HTML を本文テキストにする。
+//
+// タグは「空白に」置き換える。textContent で取ると表のセルが
+// 区切り無しで連結され(<td>A</td><td>B</td> -> "AB")、
+// 領収書の項目名と値がくっついて読めなくなる。
+//
+// 実体参照のデコードは必須。実データの PayPal 領収書は金額を
+// 「&yen;12,000 JPY」と書いてくるので、放置すると通貨記号を
+// 見失って品目も金額も取り違える。
+// タグを外したあとのテキストに対してだけ DOM を通す。
+function decodeEntities(text) {
+  if (!text.includes("&")) return text;
+  try {
+    const doc = new DOMParser().parseFromString(text, "text/html");
+    return doc.documentElement.textContent || text;
+  } catch (e) {
+    return text;
+  }
+}
+
+function htmlToText(html) {
+  let text = html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ");
+  text = text.replace(/<[^>]+>/g, " ");
+  return decodeEntities(text);
+}
+
+function parseHeaders(headerBlock) {
+  const headers = {};
+  const lines = headerBlock.split(/\r\n|\n/);
+  let currentKey = null;
+  for (const line of lines) {
+    if (/^\s/.test(line) && currentKey) {
+      headers[currentKey] += " " + line.trim();
+    } else {
+      const idx = line.indexOf(":");
+      if (idx > -1) {
+        currentKey = line.slice(0, idx).trim().toLowerCase();
+        headers[currentKey] = line.slice(idx + 1).trim();
+      }
+    }
+  }
+  return headers;
+}
+
+function getHeaderCharset(ctValue) {
+  const m = /charset="?([^";]+)"?/i.exec(ctValue || "");
+  return m ? m[1] : "utf-8";
+}
+
+function extractPartsRecursive(text, boundary, results) {
+  const parts = text.split("--" + boundary);
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed || trimmed === "--") continue;
+    const headerEnd = part.search(/\r\n\r\n|\n\n/);
+    if (headerEnd === -1) continue;
+    const headerBlock = part.slice(0, headerEnd);
+    const body = part.slice(headerEnd).replace(/^(\r\n\r\n|\n\n)/, "");
+    const headers = parseHeaders(headerBlock);
+    const ctype = headers["content-type"] || "";
+    const nested = /boundary="?([^";]+)"?/i.exec(ctype);
+    if (/multipart\//i.test(ctype) && nested) {
+      extractPartsRecursive(body, nested[1], results);
+    } else {
+      results.push({ headers, body });
+    }
+  }
+}
+
+// 7bit / 8bit / binary の本文は「エンコードされていない」だけで、
+// バイト列であることは変わらない。charset を当てずにそのまま文字列として
+// 扱うと壊れる。実データの DMM のメールは iso-2022-jp の 7bit で、
+// 未デコードだとエスケープ列 "ESC $ B" の $ を通貨記号と誤認して
+// ¥1,780 が $43 になっていた。UTF-8 の 8bit 本文も同様に化ける。
+function decodeBinaryString(str, charset) {
+  const bytes = Uint8Array.from(str, c => c.charCodeAt(0) & 0xff);
+  for (const candidate of [charset, "utf-8"]) {
+    if (!candidate) continue;
+    try { return new TextDecoder(candidate).decode(bytes); } catch (e) { /* 次を試す */ }
+  }
+  return str;
+}
+
+function decodeBody(text, cte, charset) {
+  if (cte === "base64") return decodeBase64(text, charset);
+  if (cte === "quoted-printable") return decodeQuotedPrintable(text, charset);
+  return decodeBinaryString(text, charset);
+}
+
+function decodePart(part) {
+  const ctype = part.headers["content-type"] || "text/plain";
+  const cte = (part.headers["content-transfer-encoding"] || "").toLowerCase();
+  const text = decodeBody(part.body, cte, getHeaderCharset(ctype));
+  return { ctype: ctype.split(";")[0].trim().toLowerCase(), text };
+}
+
+function parseEml(raw) {
+  const headerEnd = raw.search(/\r\n\r\n|\n\n/);
+  if (headerEnd === -1) return { subject: "", from: "", date: "", body: raw };
+  const headerBlock = raw.slice(0, headerEnd);
+  const body = raw.slice(headerEnd).replace(/^(\r\n\r\n|\n\n)/, "");
+  const headers = parseHeaders(headerBlock);
+
+  const messageId = (headers["message-id"] || "").trim();
+  const subject = decodeMimeWord(headers["subject"] || "");
+  const from = decodeMimeWord(headers["from"] || "");
+  const date = headers["date"] || "";
+  const ctype = headers["content-type"] || "text/plain";
+  const boundaryMatch = /boundary="?([^";]+)"?/i.exec(ctype);
+
+  let bodyText = "";
+  if (/multipart\//i.test(ctype) && boundaryMatch) {
+    const results = [];
+    extractPartsRecursive(body, boundaryMatch[1], results);
+    const decoded = results.map(decodePart);
+    const plain = decoded.find(p => p.ctype === "text/plain");
+    const html = decoded.find(p => p.ctype === "text/html");
+    if (plain) bodyText = plain.text;
+    else if (html) bodyText = htmlToText(html.text);
+  } else {
+    const cte = (headers["content-transfer-encoding"] || "").toLowerCase();
+    bodyText = decodeBody(body, cte, getHeaderCharset(ctype));
+    if (/text\/html/i.test(ctype)) bodyText = htmlToText(bodyText);
+  }
+  return { subject, from, date, messageId, body: bodyText };
+}
+
+// ============ 請求元判定 & 金額抽出 ============
+
+const MERCHANT_RULES = {
+  "Amazon": ["amazon.co.jp", "auto-confirm@amazon"],
+  "楽天市場": ["rakuten.co.jp", "rakuten market"],
+  "Apple": ["apple.com", "no_reply@email.apple.com"],
+  "セブン-イレブン": ["7-eleven", "sej.co.jp"],
+  "ファミリーマート": ["family.co.jp", "familymart"],
+  "ローソン": ["lawson.co.jp"],
+  "Uber Eats": ["uber.com", "ubereats"],
+  "Netflix": ["netflix.com"],
+  "Spotify": ["spotify.com"],
+};
+
+// 通貨の表記ゆれ -> ISO コード
+const CURRENCY_BY_TOKEN = {
+  "¥": "JPY", "￥": "JPY", "円": "JPY", "JPY": "JPY",
+  "$": "USD", "US$": "USD", "USD": "USD",
+  "€": "EUR", "EUR": "EUR",
+  "£": "GBP", "GBP": "GBP",
+};
+const CURRENCY_SYMBOL = { JPY: "¥", USD: "$", EUR: "€", GBP: "£" };
+const DEFAULT_CURRENCY = "JPY";  // 通貨表記が無いとき。日本のレシートが主対象。
+
+// 小数あり($12.34)と2桁以上の整数(3,980)の両方。
+// 整数側は「数字で始まり数字で終わる」で桁数を担保する
+// (\d{2} 始まりだと 3,980 の "3," で落ちる)。
+const _NUM = String.raw`(?:\d[\d,]*\.\d{1,2}|\d[\d,]*\d)`;
+const _PRE = String.raw`(?:US\$|[¥￥$€£]|USD|JPY|EUR|GBP)`;
+const _SUF = String.raw`(?:円|USD|JPY|EUR|GBP)`;
+const _LABEL = String.raw`(?:合計金額|合計|ご請求金額|ご利用金額|お支払金額|お支払い金額|決済金額|請求額|総額` +
+               String.raw`|Order Total|Grand Total|Total|Amount charged|Amount paid|Amount due|Amount)`;
+
+// ラベル付きを最優先。読み飛ばしは最短一致にしないと
+// "Total: USD 49.99" の USD を食い潰して通貨が円に化ける。
+const AMOUNT_PATTERNS = [
+  new RegExp(`${_LABEL}[^\\d¥￥$€£]{0,12}?(${_PRE})?\\s*(${_NUM})\\s*(${_SUF})?`, "i"),
+  new RegExp(`(${_PRE})\\s*(${_NUM})()`, "i"),
+  new RegExp(`()(${_NUM})\\s*(${_SUF})`, "i"),
+];
+
+function currencyOf(pre, suf) {
+  for (const token of [pre, suf]) {
+    if (!token) continue;
+    const t = token.trim();
+    if (CURRENCY_BY_TOKEN[t]) return CURRENCY_BY_TOKEN[t];
+    if (CURRENCY_BY_TOKEN[t.toUpperCase()]) return CURRENCY_BY_TOKEN[t.toUpperCase()];
+  }
+  return DEFAULT_CURRENCY;
+}
+
+function formatMoney(amount, currency) {
+  const symbol = CURRENCY_SYMBOL[currency] || currency + " ";
+  const digits = (currency === "JPY" && Number.isInteger(amount)) ? 0 : 2;
+  return symbol + amount.toLocaleString("ja-JP", {
+    minimumFractionDigits: digits, maximumFractionDigits: digits,
+  });
+}
+
+// 送信専用アドレスによく付く飾りのラベル。請求元名の推測時に取り除く。
+const SENDER_NOISE = new Set([
+  "mail", "mails", "email", "emails", "e", "news", "info", "noreply", "no-reply",
+  "reply", "mailer", "smtp", "notification", "notifications", "notice", "order",
+  "orders", "shop", "store", "member", "service", "support", "account", "accounts",
+  "post", "auto", "auto-confirm", "cs", "link", "click", "delivery", "receipt", "billing",
+]);
+
+// jp の下にもう1段ある形式(co.jp / ne.jp など)を判別するため
+const TLD_SECOND = new Set(["co", "ne", "or", "ac", "go", "gr", "ed", "lg", "com", "net", "org"]);
+
+function parseFrom(from) {
+  // 例: 楽天市場 <order@rakuten.co.jp> / order@rakuten.co.jp
+  const m = /<([^>]+)>/.exec(from || "");
+  const email = (m ? m[1] : (from || "")).trim();
+  let name = m ? from.slice(0, m.index).trim() : "";
+  name = name.replace(/^["'\s]+|["'\s]+$/g, "");
+  const at = email.lastIndexOf("@");
+  const domain = at >= 0 ? email.slice(at + 1).toLowerCase().trim() : "";
+  return { name, email, domain };
+}
+
+function merchantFromDomain(domain) {
+  if (!domain) return "";
+  let labels = domain.split(".").filter(Boolean);
+  // email.apple.com → apple.com のように、送信用サブドメインを剥がす
+  while (labels.length > 2 && SENDER_NOISE.has(labels[0])) labels.shift();
+  if (labels.length < 2) return labels[0] || "";
+  const last = labels[labels.length - 1];
+  const second = labels[labels.length - 2];
+  // rakuten.co.jp なら co.jp を飛ばして rakuten を取る
+  const idx = (last.length === 2 && TLD_SECOND.has(second)) ? labels.length - 3 : labels.length - 2;
+  const core = labels[idx] || "";
+  return core ? core.charAt(0).toUpperCase() + core.slice(1) : "";
+}
+
+// 表示名がこれらだと請求元の役に立たない。
+// 実データに "no-reply <noreply@cygames.com>" があり、
+// 8件すべてが請求元「no-reply」になっていた。ドメイン側に落とす。
+const NOISE_NAMES = new Set([
+  "noreply", "donotreply", "reply", "info", "mail", "email", "support",
+  "service", "customerservice", "admin", "system", "postmaster",
+  "notification", "notifications", "notice", "order", "orders", "billing",
+]);
+
+function identifyMerchant(sender, subject) {
+  const text = (sender + " " + subject).toLowerCase();
+  for (const [merchant, keywords] of Object.entries(MERCHANT_RULES)) {
+    for (const kw of keywords) {
+      if (text.includes(kw.toLowerCase())) return merchant;
+    }
+  }
+  // ルールに無い相手でも「不明」で潰さない。
+  // 送信元の表示名が一番読みやすく、無ければドメインから引き出す。
+  const { name, domain } = parseFrom(sender);
+  const bare = name.toLowerCase().replace(/[-_]/g, "");
+  if (name && !name.includes("@") && !NOISE_NAMES.has(bare)) {
+    return name.length > 30 ? name.slice(0, 30) + "…" : name;
+  }
+  return merchantFromDomain(domain) || "不明";
+}
+
+// ============ 請求元名の正規化 ============
+//
+// 同じ相手が複数の表記で届く。実データで起きていたこと:
+//   COGNOSPHERE PTE. LTD. / PTE. LTD... / PTE.LTD.  -> COGNOSPHERE
+//   HK KURO GAMES LIMITE... / LIMITED               -> HK KURO GAMES
+//   KURO TECHNOLOGY (HONG KONG) CO., LIMITED        -> KURO TECHNOLOGY
+//   合同会社DMM.com info@mail.dmm.com +81 3-...     -> DMM.com
+// 揃えないと同一相手が別行に分かれて内訳が読めない。
+
+const LEGAL_TOKENS = new Set([
+  "PTE", "LTD", "LIMITED", "INC", "LLC", "CORP", "CORPORATION",
+  "CO", "GMBH", "SA", "BV", "KK", "PLC", "AG", "SRL",
+]);
+const LEGAL_PREFIX_JA = ["合同会社", "株式会社", "有限会社", "一般社団法人"];
+
+function normalizeMerchant(name) {
+  if (!name) return "";
+  let s = name.trim();
+
+  // 連絡先が続けて入っていることがあるので、そこで切る
+  s = s.split(/\s+[\w.+-]+@[\w.-]+/)[0];
+  s = s.split(/\s+\+\d/)[0];
+
+  const truncated = /[.．]{2,}$/.test(s);
+  s = s.replace(/[.．]{2,}$/, "").trim();
+
+  // 括弧が閉じていない = 途中で切れている。開き括弧の手前で捨てる
+  const opens = (s.match(/\(/g) || []).length;
+  const closes = (s.match(/\)/g) || []).length;
+  if (opens > closes) s = s.slice(0, s.lastIndexOf("(")).trim();
+
+  for (const prefix of LEGAL_PREFIX_JA) {
+    if (s.startsWith(prefix)) { s = s.slice(prefix.length).trim(); break; }
+  }
+
+  // 「法人格が始まる位置」で切る。括弧付きの地域表記もここで落ちる。
+  const tokens = s.split(/\s+/);
+  let cut = tokens.length;
+  for (let i = 0; i < tokens.length; i++) {
+    const barePart = tokens[i].replace(/^[.,、()]+|[.,、()]+$/g, "").toUpperCase();
+    if (!barePart) continue;
+    if (LEGAL_TOKENS.has(barePart) || tokens[i].startsWith("(")) { cut = i; break; }
+    // 末尾が途中で切れた法人格 (LIMITE -> LIMITED)
+    if (truncated && i === tokens.length - 1 && barePart.length >= 2) {
+      let hit = false;
+      LEGAL_TOKENS.forEach(w => { if (w.startsWith(barePart)) hit = true; });
+      if (hit) { cut = i; break; }
+    }
+  }
+  s = tokens.slice(0, cut).join(" ").trim() || s;
+
+  // "COGNOSPHERE PTE.LTD." のように空白無しで続く形
+  s = s.replace(/\s*(PTE|CO)\.?\s*(LTD|LIMITED)?\.?$/i, "").trim();
+
+  return s.replace(/[\s.,、-]+$/, "").trim();
+}
+
+// ============ 領収書フォーマット別パーサー ============
+//
+// 決済代行を挟むと送信元は請求元ではない。実データ1031通のうち
+// 714通(69%)が PayPal 経由で、送信元だけ見ると全部「PayPal」に潰れる。
+// 実際の請求先は本文の「マーチャント」欄にある。
+// 1つも当たらなければ identifyMerchant() の送信元推測に落ちる。
+
+const PP_MERCHANT = /マーチャント\s*([^\n]+?)\s*(?:\n|請求書ID|取引ID|説明|マーチャントへの指示)/;
+const PP_ITEM = /説明\s*単価\s*数量\s*金額\s*([\s\S]+?)\s*[¥￥$€£]/;
+const GP_DEVELOPER = /Google Play での\s*([^\n]+?)\s*からの購入/;
+const GP_ITEM_LINE = /アイテム\s*価格\s*([\s\S]+?)\s*[¥￥]\s*[\d,]+/;
+// 「280水晶（月パス） (崩壊3rd)」の末尾、半角括弧がアプリ名。
+// 全角括弧はアイテム名の一部なので対象にしない。
+const GP_APP_IN_ITEM = /\(([^()]{1,40})\)\s*$/;
+// Apple 旧レイアウト: 区切り線 -> アプリ名 -> 金額
+const AP_LAYOUT_OLD = /-{10,}\s*([^\n¥￥]{1,60}?)\s*[¥￥]\s*[\d,]+/;
+// Apple 新レイアウト: App Store -> アプリ名 -> アイテム名 -> 課金種別
+const AP_LAYOUT_NEW = /App\s*Store\s*\n\s*([^\n]{1,80}?)\s*\n\s*([^\n]{1,80}?)\s*\n\s*(?:アプリ内課金|App内課金|自動更新)/;
+// 「8980水晶」「毎月更新 ジュエル 7500個」はアプリ名ではない
+const AP_ITEM_LIKE = /^(?:\d|毎月更新|年間|月額)|(?:個|水晶|ジュエル|パック|チケット)$/;
+
+function isSeparator(text) {
+  const s = (text || "").trim();
+  if (!s) return true;
+  return !/[^-—=_・*\s　]/.test(s);
+}
+
+// 表記ゆれを1つに寄せる。Apple の領収書はアプリ名に宣伝文が付くことがあり、
+// 同じアプリが「ドラゴンクエストウォーク」「〜 ドラクエの位置情報ゲーム」
+// 「〜 歩く楽しみが増える位置情報ゲーム」の3通りで届く(実データ412通で確認)。
+// 短い名前が長い名前の先頭に一致するなら同じものとみなし、短いほうに寄せる。
+// 短すぎる名前で巻き込むと別物まで統合するため、4文字未満は基準にしない。
+function canonicalizeMerchants(names) {
+  const uniq = [...new Set(names.filter(Boolean))].sort((a, b) => a.length - b.length);
+  const map = new Map();
+  for (const name of uniq) {
+    let target = name;
+    for (const shorter of uniq) {
+      if (shorter.length < 4 || shorter === name) continue;
+      if (shorter.length >= name.length) break;
+      // 語の途中で切れた一致を避けるため、続きは区切り文字であること
+      if (!(name.startsWith(shorter) && " 　-—:：/".includes(name[shorter.length]))) continue;
+      // 差分が短いものは別ブランドとみなして統合しない。
+      // 宣伝文は長く、別サービスは短い(「Amazon」と「Amazon Pay」)。
+      // これが無いと Amazon Pay 経由の支払いが Amazon の買い物に混ざる。
+      if (name.length - shorter.length < 5) continue;
+      target = map.get(shorter) || shorter;
+      break;
+    }
+    map.set(name, target);
+  }
+  return map;
+}
+
+function parseReceipt(sender, subject, body) {
+  const from = (sender || "").toLowerCase();
+
+  // --- PayPal ---
+  if (from.includes("paypal") || (body.includes("マーチャント") && body.includes("PayPal"))) {
+    const m = PP_MERCHANT.exec(body);
+    if (m) {
+      const merchant = normalizeMerchant(m[1]);
+      if (merchant) {
+        const i = PP_ITEM.exec(body);
+        return { merchant, item: i ? i[1].split(/\s+/).join(" ").slice(0, 60) : "" };
+      }
+    }
+  }
+
+  // --- Apple (App Store / iTunes) ---
+  // 送信元は常に no_reply@email.apple.com なので、そのままだと全件
+  // 「Apple」に潰れる。アプリ名は本文にしかない。
+  // 実データ412通でレイアウトが2種類あることを確認している。
+  if (from.includes("apple.com") || from.includes("itunes")
+      || body.includes("Apple 領収書") || body.includes("APPLE ACCOUNT")) {
+    let app = "", item = "";
+    const nw = AP_LAYOUT_NEW.exec(body);
+    if (nw && !isSeparator(nw[1])) {
+      app = nw[1].split(/\s+/).join(" ");
+      item = nw[2].split(/\s+/).join(" ");
+    } else {
+      const od = AP_LAYOUT_OLD.exec(body);
+      if (od) app = od[1].split(/\s+/).join(" ");
+    }
+    // アプリ名の位置に課金アイテム名しか無い領収書がある
+    // (「聖晶石 168個 ¥10,000」だけでアプリ名の行が無い)。
+    // 請求元は Apple のままにして品目だけ残し、titleFromItem に拾わせる。
+    if (app && (isSeparator(app) || AP_ITEM_LIKE.test(app))) { item = app; app = ""; }
+    if (app || item) {
+      return { merchant: (app || "Apple").slice(0, 60), item: item.slice(0, 60) };
+    }
+  }
+
+  // --- Google Play ---
+  if (from.includes("googleplay-noreply@google.com") || body.includes("Google Play での")) {
+    const dev = GP_DEVELOPER.exec(body);
+    const i = GP_ITEM_LINE.exec(body);
+    let item = "", app = "";
+    if (i) {
+      item = i[1].split(/\s+/).join(" ").slice(0, 60);
+      const a = GP_APP_IN_ITEM.exec(item);
+      if (a) app = a[1].trim();
+    }
+    const merchant = app || (dev ? normalizeMerchant(dev[1]) : "");
+    if (merchant) return { merchant, item };
+  }
+
+  return null;
+}
+
+// ============ 課金アイテムからタイトルを特定 ============
+//
+// 決済上の請求元は運営会社なので、1社が複数タイトルを出していると
+// 内訳が潰れる(実データでは COGNOSPHERE 1行に 451件が固まっていた)。
+// 課金アイテム名はタイトル固有なので、そこから引き当てる。
+// 当たらなければ請求元のまま残す(推測で間違えるより良い)。
+const TITLE_BY_ITEM_KEYWORD = {
+  "原神": ["創世結晶", "天空紀行", "空月の祝福", "原石"],
+  "崩壊：スターレイル": ["列車補給標章", "星穹", "星軌通行証", "古櫃"],
+  "ゼンレスゾーンゼロ": ["モノクローム", "インターノット会員権", "ナナシビトの褒章"],
+  "鳴潮": ["月相", "潮汐", "波紋"],
+  "崩壊3rd": ["水晶", "ギフトコイン"],
+  "Fate/Grand Order": ["聖晶石", "呼符"],
+  "プリンセスコネクト！Re:Dive": ["ジュエル"],
+  "ドラゴンクエストウォーク": ["ジェムパック"],
+};
+
+function titleFromItem(item) {
+  if (!item) return "";
+  for (const [title, keywords] of Object.entries(TITLE_BY_ITEM_KEYWORD)) {
+    for (const kw of keywords) {
+      if (item.includes(kw)) return title;
+    }
+  }
+  return "";
+}
+
+// 送信元・件名・本文から請求元と品目を決める。CLI 側と同じ順序。
+function resolveMerchant(sender, subject, body) {
+  const receipt = parseReceipt(sender, subject, body);
+  const merchant = receipt ? receipt.merchant : identifyMerchant(sender, subject);
+  const item = receipt ? receipt.item : "";
+  // 品目で引けないときは請求元名でも引く。アプリ名の位置に課金アイテム名が
+  // 入っている領収書があり(「キャンペーン水晶5」など)、そのままだと
+  // アイテム名が請求元として並んでしまう。
+  const title = titleFromItem(item) || titleFromItem(merchant);
+  return { merchant: title || merchant, item };
+}
+
+// { amount, currency } を返す。取れなければ null。
+// 通貨をここで確定させ、下流では絶対に通貨をまたいで足さない。
+function extractAmount(text) {
+  if (!text) return null;
+  for (const pattern of AMOUNT_PATTERNS) {
+    const m = pattern.exec(text);
+    if (!m) continue;
+    const value = parseFloat(m[2].replace(/,/g, ""));
+    if (!Number.isFinite(value)) continue;
+    return { amount: value, currency: currencyOf(m[1], m[3]) };
+  }
+  return null;
+}
+
+function parseDateHeader(dateStr) {
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// ============ ファイル読み込み & 集計 ============
+
+function readFileAsBinaryString(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const buf = new Uint8Array(reader.result);
+      let str = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < buf.length; i += CHUNK) {
+        str += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+      }
+      resolve(str);
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+let allRecords = [];
+let lastSkipped = 0;   // レート変更時に同じ状態で描き直すため保持する
+let lastDuplicated = 0;
+const seenMessageIds = new Set();  // 読み込み済みメールの Message-ID
+
+// 描画に順番を譲る。
+// requestAnimationFrame は使わない。非表示タブでは発火しないため、
+// 待っている間に別のタブへ移ると解析がそこで止まってしまう。
+// 1000通の解析は数分かかるので、離席・タブ切り替えは普通に起きる。
+function yieldToBrowser() {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+async function handleFiles(fileList) {
+  const dropped = Array.from(fileList);
+  const files = dropped.filter(f => f.name.toLowerCase().endsWith(".eml"));
+
+  if (files.length === 0) {
+    // 黙って何も起きないのが一番分かりにくいので、必ず理由を出す
+    const results = document.getElementById("results");
+    results.style.display = "block";
+    document.getElementById("ledgerBody").innerHTML =
+      '<tr><td colspan="3" class="empty-note">' +
+      `${dropped.length} 件を受け取りましたが、.eml ファイルがありませんでした。<br>` +
+      'メールソフトで「書き出す」を実行してできた <b>.eml</b> を指定してください。' +
+      '</td></tr>';
+    document.getElementById("totalAmount").textContent = "¥0";
+    return;
+  }
+
+  // サンプル表示中に実データが来たら、混ざらないよう捨てる
+  const banner = document.getElementById("sampleBanner");
+  if (banner.classList.contains("show")) {
+    banner.classList.remove("show");
+    allRecords = [];
+  }
+
+  const records = [];
+  let skipped = 0;
+  let duplicated = 0;
+
+  // 1000通規模だと数分かかる。無表示だと固まったように見えるので必ず出す。
+  const progress = document.getElementById("progress");
+  const progressLabel = document.getElementById("progressLabel");
+  const progressBar = document.getElementById("progressBar");
+  progress.classList.add("show");
+  progressLabel.textContent = `0 / ${files.length} 通`;
+  progressBar.style.width = "0%";
+  // 一度描かせてから走らせる。でないと解析が終わるまで進捗が出ない。
+  await yieldToBrowser();
+
+  let done = 0;
+  for (const file of files) {
+    try {
+      const raw = await readFileAsBinaryString(file);
+      const { subject, from, date, body, messageId } = parseEml(raw);
+      // 同じメールが2回来ることがある(書き出しフォルダが重なっている等)。
+      // ファイル名は違っても中身は同じなので Message-ID で弾く。
+      if (messageId) {
+        if (seenMessageIds.has(messageId)) { duplicated++; continue; }
+        seenMessageIds.add(messageId);
+      }
+      const found = extractAmount(subject) ?? extractAmount(body);
+      if (found === null) { skipped++; continue; }
+      const { merchant, item } = resolveMerchant(from, subject, body);
+      const d = parseDateHeader(date);
+      records.push({
+        file: file.name,
+        date: d ? d.toISOString().slice(0, 10) : "不明",
+        merchant, item, amount: found.amount, currency: found.currency,
+        subject, sender: from,
+      });
+    } catch (e) {
+      skipped++;
+    }
+
+    done++;
+    // 毎回描き直すと解析より描画が重くなるので間引く
+    if (done % 20 === 0 || done === files.length) {
+      progressLabel.textContent = `${done} / ${files.length} 通`;
+      progressBar.style.width = (done / files.length * 100).toFixed(1) + "%";
+      // 描画の順番を譲る。これが無いと画面が更新されない。
+      await yieldToBrowser();
+    }
+  }
+
+  progress.classList.remove("show");
+  lastDuplicated += duplicated;
+
+  allRecords = allRecords.concat(records);
+  // 同じ相手が複数の表記で届くので、集計前に寄せる
+  const alias = canonicalizeMerchants(allRecords.map(r => r.merchant));
+  for (const r of allRecords) r.merchant = alias.get(r.merchant) || r.merchant;
+
+  renderResults(skipped);
+}
+
+function renderResults(skipped) {
+  lastSkipped = skipped || 0;
+  const resultsEl = document.getElementById("results");
+  if (allRecords.length === 0) {
+    resultsEl.style.display = "block";
+    document.getElementById("periodRow").classList.remove("show");
+    document.getElementById("ledgerBody").innerHTML =
+      '<tr><td colspan="3" class="empty-note">金額を抽出できたメールがありませんでした。</td></tr>';
+    document.getElementById("totalAmount").textContent = "¥0";
+    return;
+  }
+
+  resultsEl.style.display = "block";
+  document.getElementById("periodRow").classList.add("show");
+  syncPeriodBounds();
+
+  const visible = visibleRecords();
+  updatePeriodNote(visible.length);
+
+  if (visible.length === 0) {
+    document.getElementById("ledgerBody").innerHTML =
+      '<tr><td colspan="3" class="empty-note">この期間に該当するレシートはありません。</td></tr>';
+    document.getElementById("detailList").innerHTML = "";
+    document.getElementById("totalAmount").textContent = "¥0";
+    document.getElementById("subTotals").innerHTML = "";
+    document.getElementById("fxRow").classList.remove("show");
+    document.getElementById("skipNote").textContent = "";
+    return;
+  }
+
+  // (請求元, 通貨) 単位で集計する。キーに通貨を含めているのは、
+  // 円とドルを足した数字を作らせないため。合算しても意味が無い。
+  const totals = new Map();   // "請求元 通貨" -> 金額
+  const counts = new Map();
+  const grands = new Map();   // 通貨 -> 総額
+  for (const r of visible) {
+    const key = r.merchant + " " + r.currency;
+    totals.set(key, (totals.get(key) || 0) + r.amount);
+    counts.set(key, (counts.get(key) || 0) + 1);
+    grands.set(r.currency, (grands.get(r.currency) || 0) + r.amount);
+  }
+
+  renderTotals(grands);
+
+  const stamp = document.getElementById("stamp");
+  stamp.classList.remove("show");
+  void stamp.offsetWidth; // reflow でアニメーションを再トリガー
+  stamp.classList.add("show");
+
+  // 通貨ごとに固めた上で、金額の大きい順
+  const keys = [...totals.keys()].sort((a, b) => {
+    const [, ca] = a.split(" "), [, cb] = b.split(" ");
+    return ca === cb ? totals.get(b) - totals.get(a) : ca.localeCompare(cb);
+  });
+  const tbody = document.getElementById("ledgerBody");
+  tbody.innerHTML = keys.map(k => {
+    const [merchant, currency] = k.split(" ");
+    return `
+    <tr>
+      <td><div class="merchant-name"><span class="dot"></span>${escapeHtml(merchant)}</div></td>
+      <td class="num amount">${formatMoney(totals.get(k), currency)}</td>
+      <td class="num count">${counts.get(k)}</td>
+    </tr>`;
+  }).join("");
+
+  const detailList = document.getElementById("detailList");
+  const sorted = [...visible].sort((a, b) => (a.date < b.date ? 1 : -1));
+  detailList.innerHTML = sorted.map(r => `
+    <div class="detail-item">
+      <div class="left"><span class="date">${r.date}</span>${escapeHtml(r.merchant)} — ${escapeHtml(r.item || r.subject).slice(0, 44)}</div>
+      <div class="right">${formatMoney(r.amount, r.currency)}</div>
+    </div>
+  `).join("");
+
+  const skipNote = document.getElementById("skipNote");
+  const notes = [];
+  if (skipped > 0) notes.push(`${skipped} 件のメールは金額を抽出できずスキップしました`);
+  if (lastDuplicated > 0) notes.push(`${lastDuplicated} 件は同じメールの重複として除外しました`);
+  skipNote.textContent = notes.join(" / ");
+}
+
+// 通貨ごとの総額を出す。1つの数字にまとめることは絶対にしない。
+// 換算値を出すときも、元の通貨別内訳は必ず残す。
+function renderTotals(grands) {
+  const currencies = [...grands.keys()].sort();
+  const main = currencies.includes("JPY") ? "JPY" : currencies[0];
+  const others = currencies.filter(c => c !== main);
+
+  document.getElementById("totalAmount").textContent = formatMoney(grands.get(main), main);
+
+  const lines = others.map(c => formatMoney(grands.get(c), c));
+
+  const foreign = currencies.filter(c => c !== "JPY");
+  if (fxRates && foreign.length) {
+    const converted = currencies.reduce((sum, c) => {
+      const rate = c === "JPY" ? 1 : fxRates[c];
+      return rate ? sum + grands.get(c) * rate : sum;
+    }, 0);
+    const missing = foreign.filter(c => !fxRates[c]);
+    lines.push(
+      `<span class="converted">円換算合計 約 ${formatMoney(Math.round(converted), "JPY")}` +
+      `（${escapeHtml(fxLabel)}）` +
+      (missing.length ? ` ※ ${missing.join(", ")} はレート未取得のため未算入` : "") +
+      `</span>`
+    );
+  }
+
+  document.getElementById("subTotals").innerHTML = lines.join("<br>");
+
+  // 外貨が1つも無いなら為替の欄は出さない
+  document.getElementById("fxRow").classList.toggle("show", foreign.length > 0);
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+// ============ CSV 書き出し ============
+
+function toCsv(rows) {
+  return rows.map(row => row.map(cell => {
+    const s = String(cell ?? "");
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(",")).join("\r\n");
+}
+
+function downloadCsv(filename, rows) {
+  const bom = "\uFEFF";
+  const blob = new Blob([bom + toCsv(rows)], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById("exportSummary").addEventListener("click", () => {
+  const totals = new Map(), counts = new Map();
+  for (const r of visibleRecords()) {
+    const key = r.merchant + " " + r.currency;
+    totals.set(key, (totals.get(key) || 0) + r.amount);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const rows = [["請求元", "通貨", "合計金額", "件数", "平均単価"]];
+  [...totals.keys()]
+    .sort((a, b) => {
+      const [, ca] = a.split(" "), [, cb] = b.split(" ");
+      return ca === cb ? totals.get(b) - totals.get(a) : ca.localeCompare(cb);
+    })
+    .forEach(k => {
+      const [merchant, currency] = k.split(" ");
+      const total = totals.get(k), count = counts.get(k);
+      const round = v => currency === "JPY" ? Math.round(v) : Number(v.toFixed(2));
+      rows.push([merchant, currency, round(total), count, round(total / count)]);
+    });
+  downloadCsv("summary.csv", rows);
+});
+
+document.getElementById("exportDetail").addEventListener("click", () => {
+  const rows = [["日付", "請求元", "品目", "通貨", "金額", "送信元", "件名", "ファイル"]];
+  [...visibleRecords()].sort((a, b) => (a.date > b.date ? 1 : -1)).forEach(r => {
+    rows.push([r.date, r.merchant, r.item || "", r.currency, r.amount, r.sender, r.subject, r.file]);
+  });
+  downloadCsv("detail.csv", rows);
+});
+
+// ============ 期間絞り ============
+//
+// allRecords は読み込んだ全件を保持したまま、表示・集計・書き出しは
+// visibleRecords() を通す。絞り込みで元データを捨てないので、
+// 期間を戻せばいつでも全件に戻る。
+
+let periodFrom = "";
+let periodTo = "";
+
+function visibleRecords() {
+  return allRecords.filter(r => {
+    if (r.date === "不明") return true;   // 日付が読めなかったものは落とさない
+    if (periodFrom && r.date < periodFrom) return false;
+    if (periodTo && r.date > periodTo) return false;
+    return true;
+  });
+}
+
+// 読み込んだデータの実際の範囲を date 入力の上下限にする
+function syncPeriodBounds() {
+  const dates = allRecords.map(r => r.date).filter(d => d !== "不明").sort();
+  if (!dates.length) return;
+  const [min, max] = [dates[0], dates[dates.length - 1]];
+  for (const id of ["periodFrom", "periodTo"]) {
+    const el = document.getElementById(id);
+    el.min = min;
+    el.max = max;
+  }
+}
+
+function updatePeriodNote(shownCount) {
+  const note = document.getElementById("periodNote");
+  const unknown = allRecords.filter(r => r.date === "不明").length;
+  if (!periodFrom && !periodTo) {
+    note.textContent = `全 ${allRecords.length} 件を表示中`;
+  } else {
+    note.textContent = `${allRecords.length} 件中 ${shownCount} 件を表示中`
+      + (unknown ? `（日付を読めなかった ${unknown} 件は常に含めています）` : "");
+  }
+}
+
+function setPeriod(from, to) {
+  periodFrom = from || "";
+  periodTo = to || "";
+  document.getElementById("periodFrom").value = periodFrom;
+  document.getElementById("periodTo").value = periodTo;
+  renderResults(lastSkipped);
+}
+
+function ymd(d) {
+  // toISOString は UTC に寄るので、ローカル日付のままで組み立てる
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+const PERIOD_PRESETS = {
+  thisMonth() {
+    const now = new Date();
+    return [ymd(new Date(now.getFullYear(), now.getMonth(), 1)),
+            ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0))];
+  },
+  lastMonth() {
+    const now = new Date();
+    return [ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+            ymd(new Date(now.getFullYear(), now.getMonth(), 0))];
+  },
+  thisYear() {
+    const y = new Date().getFullYear();
+    return [`${y}-01-01`, `${y}-12-31`];
+  },
+  all: () => ["", ""],
+};
+
+document.getElementById("periodFrom").addEventListener("change", e => {
+  setPeriod(e.target.value, periodTo);
+});
+document.getElementById("periodTo").addEventListener("change", e => {
+  setPeriod(periodFrom, e.target.value);
+});
+document.querySelectorAll("[data-preset]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const preset = PERIOD_PRESETS[btn.dataset.preset];
+    if (preset) setPeriod(...preset());
+  });
+});
+
+// ============ 為替換算 ============
+//
+// この機能だけがネットワークを使う。CSP の connect-src でレート配信元1つに
+// 限定してあるので、他のどこにも通信できない。
+// 送るのは通貨コードだけで、メールの内容は一切含まれない。
+// 自動では取りに行かず、利用者がボタンを押したときだけ実行する。
+
+const FX_ENDPOINT = "https://api.frankfurter.dev/v1/latest";
+
+let fxRates = null;   // { USD: 163.82, ... } 1通貨あたりの円
+let fxLabel = "";     // 出所の表示用
+
+function currenciesInUse() {
+  return [...new Set(allRecords.map(r => r.currency))];
+}
+
+async function fetchRates(foreign) {
+  // base=USD で一度に取り、USD 経由で他通貨→円を割り出す
+  const symbols = [...new Set([...foreign, "JPY"])].filter(c => c !== "USD");
+  const url = `${FX_ENDPOINT}?base=USD&symbols=${symbols.join(",")}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`レート取得に失敗しました (HTTP ${res.status})`);
+  const data = await res.json();
+  const usdToJpy = data.rates && data.rates.JPY;
+  if (!usdToJpy) throw new Error("応答に JPY のレートが含まれていませんでした");
+
+  const rates = { USD: usdToJpy, JPY: 1 };
+  for (const c of foreign) {
+    if (c === "USD" || c === "JPY") continue;
+    const usdToC = data.rates[c];
+    if (usdToC) rates[c] = usdToJpy / usdToC;   // 1C = (円/USD) ÷ (C/USD)
+  }
+  return { rates, date: data.date };
+}
+
+document.getElementById("fetchRate").addEventListener("click", async () => {
+  const btn = document.getElementById("fetchRate");
+  const note = document.getElementById("fxNote");
+  const foreign = currenciesInUse().filter(c => c !== "JPY");
+  if (!foreign.length) return;
+
+  btn.disabled = true;
+  btn.textContent = "取得中…";
+  note.classList.remove("error");
+  try {
+    const { rates, date } = await fetchRates(foreign);
+    fxRates = rates;
+    fxLabel = `${date} 時点のレート（欧州中央銀行）`;
+    note.textContent = foreign
+      .map(c => `1 ${c} = ${rates[c] ? rates[c].toFixed(2) : "?"} 円`)
+      .join(" ／ ") + ` — ${fxLabel}`;
+    renderResults(lastSkipped);
+  } catch (e) {
+    note.classList.add("error");
+    note.textContent =
+      `${e.message}。オフラインの可能性があります。右の欄に手でレートを入れても計算できます。`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "最新レートを取得して円換算";
+  }
+});
+
+document.getElementById("manualRate").addEventListener("input", e => {
+  const v = parseFloat(e.target.value);
+  if (Number.isFinite(v) && v > 0) {
+    fxRates = { USD: v, JPY: 1 };
+    fxLabel = "手入力のレート";
+  } else {
+    fxRates = null;
+    fxLabel = "";
+  }
+  renderResults(lastSkipped);
+});
+
+// ============ PDF 保存（ブラウザの印刷経由） ============
+
+document.getElementById("exportPdf").addEventListener("click", () => window.print());
+
+// 折りたたんだままの明細は印刷に乗らないので、印刷の直前だけ開く
+let detailWasOpen = null;
+const detailEl = document.querySelector("details.detail-toggle");
+
+window.addEventListener("beforeprint", () => {
+  const shown = visibleRecords();
+  const range = dateRange(shown);
+  document.getElementById("printMeta").textContent =
+    range ? `対象期間 ${range.from} 〜 ${range.to} ／ ${shown.length} 件`
+          : `${shown.length} 件`;
+  detailWasOpen = detailEl.open;
+  detailEl.open = true;
+});
+
+window.addEventListener("afterprint", () => {
+  if (detailWasOpen !== null) detailEl.open = detailWasOpen;
+});
+
+function dateRange(records) {
+  const dates = records.map(r => r.date).filter(d => d !== "不明").sort();
+  return dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null;
+}
+
+// ============ ドラッグ&ドロップ UI ============
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const overlay = document.getElementById("overlay");
+
+// ページのどこに落としても受け取る。
+// 枠外に落ちたファイルをブラウザが開いてしまう(＝入力が消える)のを防ぐ意味もある。
+let dragDepth = 0;
+
+window.addEventListener("dragenter", e => {
+  e.preventDefault();
+  dragDepth++;
+  overlay.classList.add("show");
+});
+window.addEventListener("dragover", e => { e.preventDefault(); });
+window.addEventListener("dragleave", e => {
+  e.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) overlay.classList.remove("show");
+});
+window.addEventListener("drop", e => {
+  e.preventDefault();
+  dragDepth = 0;
+  overlay.classList.remove("show");
+  dropzone.classList.remove("drag-over");
+  const dt = e.dataTransfer;
+  if (dt && dt.files && dt.files.length) {
+    handleFiles(dt.files);
+  } else {
+    // Mail.app 等はファイルではなくファイルプロミスを渡してくるため、
+    // ブラウザ側では files が空になる。黙って無反応にせず理由を出す。
+    showDropHelp();
+  }
+});
+
+["dragenter", "dragover"].forEach(evt => {
+  dropzone.addEventListener(evt, () => dropzone.classList.add("drag-over"));
+});
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+
+fileInput.addEventListener("change", e => {
+  if (e.target.files && e.target.files.length) handleFiles(e.target.files);
+  fileInput.value = "";
+});
+
+function showDropHelp() {
+  const results = document.getElementById("results");
+  results.style.display = "block";
+  document.getElementById("ledgerBody").innerHTML =
+    '<tr><td colspan="3" class="empty-note">' +
+    'ファイルとして受け取れませんでした。<br>' +
+    'メールソフトから直接ドラッグした場合は読み込めません。' +
+    '一度フォルダに <b>.eml</b> で書き出してから、そのファイルをドロップしてください。' +
+    '</td></tr>';
+  document.getElementById("totalAmount").textContent = "¥0";
+}
+
+// ============ サンプルデータ ============
+// 書き出し作業をする前に、何が出てくるのか分かるようにするためのもの。
+// 実在のメールではなく、この場で組み立てた .eml を通常の解析経路に流している。
+
+const SAMPLE_EMAILS = [
+  ["auto-confirm@amazon.co.jp", "Amazon.co.jp ご注文の確認", "Sun, 05 Jul 2026 09:12:00 +0900",
+   "ご注文ありがとうございます。\n合計: ￥4,280\n"],
+  ["info@netflix.com", "Netflix のお支払い明細", "Wed, 08 Jul 2026 03:00:00 +0900",
+   "ご請求金額 1,490円\n"],
+  ["order@rakuten.co.jp", "【楽天市場】注文内容ご確認", "Fri, 10 Jul 2026 18:41:00 +0900",
+   "お支払金額：12,800 円\n"],
+  ["no_reply@email.apple.com", "Apple からの領収書", "Mon, 13 Jul 2026 08:00:00 +0900",
+   "合計: ￥1,200\n"],
+  ["receipt@uber.com", "Uber Eats のご注文", "Tue, 21 Jul 2026 20:05:00 +0900",
+   "ご利用金額 2,640円\n"],
+  ["ヨドバシ.com <order@yodobashi.com>", "ご注文ありがとうございます", "Fri, 17 Jul 2026 12:00:00 +0900",
+   "合計 8,470円\n"],
+  // 外貨も混ぜる。円と足し合わせないことを確認できるように。
+  ["OpenAI <billing@openai.com>", "Your receipt from OpenAI", "Mon, 06 Jul 2026 02:00:00 +0900",
+   "Total: $20.00\n"],
+  ["GitHub <noreply@github.com>", "Payment Receipt", "Thu, 09 Jul 2026 05:00:00 +0900",
+   "Amount charged $4.00\n"],
+];
+
+function buildSampleEml(sender, subject, date, body) {
+  // 実ファイルと同じ形で組み立てる。件名は MIME エンコード、
+  // 本文は UTF-8 のバイト列(1文字=1バイトの文字列)にする。
+  // ここを素の文字列にすると、実ファイル読み込みとは別経路になって
+  // サンプルだけ動く/サンプルだけ壊れる状態になる。
+  const toBinary = s => String.fromCharCode(...new TextEncoder().encode(s));
+  const b64 = btoa(toBinary(subject));
+  return `From: ${sender}\r\n` +
+         `Subject: =?UTF-8?B?${b64}?=\r\n` +
+         `Date: ${date}\r\n` +
+         `Content-Type: text/plain; charset=utf-8\r\n\r\n` +
+         toBinary(body);
+}
+
+document.getElementById("loadSample").addEventListener("click", () => {
+  allRecords = [];
+  let skipped = 0;
+  for (const [sender, subject, date, body] of SAMPLE_EMAILS) {
+    const raw = buildSampleEml(sender, subject, date, body);
+    const parsed = parseEml(raw);
+    const found = extractAmount(parsed.subject) ?? extractAmount(parsed.body);
+    if (found === null) { skipped++; continue; }
+    const d = parseDateHeader(parsed.date);
+    const resolved = resolveMerchant(parsed.from, parsed.subject, parsed.body);
+    allRecords.push({
+      file: "サンプル",
+      date: d ? d.toISOString().slice(0, 10) : "不明",
+      merchant: resolved.merchant, item: resolved.item,
+      amount: found.amount, currency: found.currency,
+      subject: parsed.subject, sender: parsed.from,
+    });
+  }
+  document.getElementById("sampleBanner").classList.add("show");
+  renderResults(skipped);
+  document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+</script>
+</body>
+</html>

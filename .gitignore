@@ -1,0 +1,7 @@
+.DS_Store
+.env
+*.eml
+*.csv
+__pycache__/
+venv/
+.venv/

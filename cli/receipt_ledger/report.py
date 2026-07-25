@@ -1,0 +1,110 @@
+"""集計と出力。"""
+
+from __future__ import annotations
+
+import csv
+import sys
+import unicodedata
+from collections import defaultdict
+from decimal import Decimal
+from pathlib import Path
+from typing import Iterable
+
+from .analyze import Record
+from .rules import format_money
+
+
+def totals_by_merchant(
+    records: Iterable[Record],
+) -> tuple[dict[tuple[str, str], Decimal], dict[tuple[str, str], int]]:
+    """(請求元, 通貨) 単位で集計する。
+
+    キーに通貨を含めているのは、円とドルを足した数字を作らせないため。
+    合算してしまうと数字は出るが意味が無い。
+    """
+    totals: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    for r in records:
+        key = (r.merchant, r.currency)
+        totals[key] += r.amount
+        counts[key] += 1
+    return dict(totals), dict(counts)
+
+
+def grand_totals(records: Iterable[Record]) -> dict[str, Decimal]:
+    """通貨ごとの総額。1つの数字にはまとめない。"""
+    out: dict[str, Decimal] = defaultdict(Decimal)
+    for r in records:
+        out[r.currency] += r.amount
+    return dict(out)
+
+
+def write_summary_csv(path: Path, records: list[Record]) -> None:
+    totals, counts = totals_by_merchant(records)
+    # Excel が UTF-8 と認識できるよう BOM 付きにする
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["請求元", "通貨", "合計金額", "件数", "平均単価"])
+        for (merchant, currency) in sorted(totals, key=lambda k: (k[1], -totals[k])):
+            total, count = totals[(merchant, currency)], counts[(merchant, currency)]
+            w.writerow([merchant, currency, total, count, (total / count).quantize(total)])
+
+
+def write_detail_csv(path: Path, records: list[Record]) -> None:
+    header = ["日付", "請求元", "品目", "通貨", "金額", "送信元", "件名", "メールボックス", "出所"]
+    fields = ["date", "merchant", "item", "currency", "amount", "sender", "subject", "mailbox", "origin"]
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for r in sorted(records, key=lambda x: x.date):
+            w.writerow([getattr(r, k) for k in fields])
+
+
+def _width(s: str) -> int:
+    """全角を2桁として数える(等幅端末で列を揃えるため)。"""
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+
+
+def _pad(s: str, width: int) -> str:
+    """左寄せ。str.ljust は全角を1桁と数えるので使えない。"""
+    return s + " " * max(0, width - _width(s))
+
+
+def _rpad(s: str, width: int) -> str:
+    """右寄せ。同上の理由で str.rjust は使えない。"""
+    return " " * max(0, width - _width(s)) + s
+
+
+def print_summary(records: list[Record], scanned: int, skipped: int,
+                  filtered: int = 0, duplicated: int = 0) -> None:
+    totals, counts = totals_by_merchant(records)
+    grands = grand_totals(records)
+
+    summary = " / ".join(format_money(v, c) for c, v in sorted(grands.items()))
+    print(f"\n走査 {scanned} 通 / レシート {len(records)} 件 / 総額 {summary}", file=sys.stderr)
+    if skipped:
+        print(f"(金額を抽出できなかった {skipped} 通はスキップ)", file=sys.stderr)
+    if duplicated:
+        print(f"(同じメールが重複していた {duplicated} 件を除外)", file=sys.stderr)
+    if filtered:
+        print(f"(期間指定の対象外だった {filtered} 件を除外)", file=sys.stderr)
+    if len(grands) > 1:
+        print("(通貨が混在しています。通貨をまたぐ合計は出しません)", file=sys.stderr)
+    print("", file=sys.stderr)
+
+    name_w = max([_width(m) for m, _ in totals] + [_width("請求元")])
+    amount_w, count_w = 14, 6
+
+    # 通貨ごとに区切って出す
+    for currency in sorted({c for _, c in totals}):
+        rows = {k: v for k, v in totals.items() if k[1] == currency}
+        if len(grands) > 1:
+            print(f"[{currency}]", file=sys.stderr)
+        print(f"{_pad('請求元', name_w)}  {_rpad('合計金額', amount_w)}  {_rpad('件数', count_w)}",
+              file=sys.stderr)
+        print("-" * (name_w + amount_w + count_w + 4), file=sys.stderr)
+        for key in sorted(rows, key=lambda k: -rows[k]):
+            amount = format_money(rows[key], currency)
+            print(f"{_pad(key[0], name_w)}  {_rpad(amount, amount_w)}  "
+                  f"{_rpad(str(counts[key]), count_w)}", file=sys.stderr)
+        print("", file=sys.stderr)
