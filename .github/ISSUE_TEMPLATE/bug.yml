@@ -1,0 +1,30 @@
+name: 不具合の報告
+description: 金額が違う、読み込めない、表示が崩れる など
+title: "[不具合] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **メールの中身や金額そのものは貼らないでください。**
+        再現に必要な範囲だけで大丈夫です。
+  - type: textarea
+    id: what
+    attributes:
+      label: 何が起きたか
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: どうなるはずだったか
+  - type: input
+    id: env
+    attributes:
+      label: 環境
+      placeholder: "macOS 26 / Chrome 150、など"
+  - type: input
+    id: count
+    attributes:
+      label: 読み込んだメールの数
+      placeholder: "300通くらい"

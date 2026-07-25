@@ -1,0 +1,48 @@
+name: 請求元が「不明」になる / 分類が違う
+description: 解析できなかった、または誤って分類された請求元を教えてください
+title: "[請求元] "
+labels: ["請求元ルール"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ルールを足せば直せる可能性が高いので、気づいたら教えてください。
+
+        **メール本文や金額は貼らないでください。** 判定に必要なのは
+        送信元のドメインと、どう表示されたかだけです。
+  - type: input
+    id: sender
+    attributes:
+      label: 送信元のドメイン
+      description: "@ より後ろだけで構いません（例: example.co.jp）"
+      placeholder: example.co.jp
+    validations:
+      required: true
+  - type: input
+    id: shown
+    attributes:
+      label: 実際に表示された請求元
+      placeholder: "不明 / PayPal / など"
+    validations:
+      required: true
+  - type: input
+    id: expected
+    attributes:
+      label: 本来こう出てほしい
+      placeholder: "サービス名やゲーム名"
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 種類
+      options:
+        - 請求元が「不明」になる
+        - 別の名前に化ける（決済代行の名前など）
+        - 同じ相手が複数行に分かれる
+        - カテゴリの分類が違う
+    validations:
+      required: true
+  - type: textarea
+    id: note
+    attributes:
+      label: 補足
+      description: 何件くらいあるか、など。任意です。
