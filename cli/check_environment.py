@@ -108,13 +108,27 @@ def main() -> None:
               f"{'作れてしまう（表示層で化ける危険）' if raw_ok else '作れない'}"
               f" → 置換処理は必須")
 
-        # 長いパス
+        # 長いファイル名（1要素の長さ）
         long_name = "あ" * 120
         try:
             (Path(tmp) / f"{long_name}.eml").write_bytes(b"x")
             check(True, "長いファイル名（全角120文字）")
-        except Exception as e:
+        except OSError as e:
             check(False, "長いファイル名（全角120文字）", f"{type(e).__name__}: 短縮処理が必要")
+
+        # パス全体の長さ。tmp 直下で測ると短いままなので、意図的に深く掘る。
+        # Windows の既定は 260 文字制限（LongPathsEnabled=1 なら緩和される）。
+        deep = Path(tmp)
+        while len(str(deep)) < 240:
+            deep = deep / "証憑フォルダ"
+        try:
+            deep.mkdir(parents=True, exist_ok=True)
+            target = deep / "2026-01-15_請求元_1780.eml"
+            target.write_bytes(b"x")
+            check(True, f"長いパス（{len(str(target))} 文字）")
+        except OSError as e:
+            check(False, f"長いパス（{len(str(deep))} 文字の階層）",
+                  f"{type(e).__name__}: 保存先の階層を浅くする必要がある")
 
         # 索引 CSV を Excel で開いたときに化けないか
         index = Path(tmp) / "index.csv"

@@ -23,12 +23,11 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
-import select
 import shutil
 import subprocess
 import sys
+import threading
 import tempfile
 import time
 from pathlib import Path
@@ -42,10 +41,17 @@ FIXTURES = Path(__file__).parent / "fixtures"
 BEGIN = "=== 照合対象ここから ==="
 END = "=== 照合対象ここまで ==="
 
+# Windows では PATH に入っていないので、実体のパスを直接見る。
 CHROME_CANDIDATES = [
+    # macOS
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    # Windows（32bit/64bit の両方の Program Files を見る）
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
 ]
 
 
@@ -53,7 +59,7 @@ def find_chrome() -> str:
     for path in CHROME_CANDIDATES:
         if Path(path).exists():
             return path
-    for name in ("google-chrome", "chromium", "chromium-browser"):
+    for name in ("google-chrome", "chromium", "chromium-browser", "chrome", "msedge"):
         found = shutil.which(name)
         if found:
             return found
@@ -130,26 +136,36 @@ def read_dom(command: list[str], deadline_sec: float = 60.0) -> str:
     (自動更新のプロセスが上がるなど)。終了を待つ実装にすると、
     **結果は既に手元にあるのに必ずタイムアウトする**。
     出力の終わりは終了コードではなく `</html>` で判定する。
+
+    読み取りに select を使わないのは、**Windows の select がソケット専用**だからである。
+    パイプを渡すと WinError 10093 で落ちる。スレッドで読めば OS を問わない。
     """
     proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    buffer = b""
-    limit = time.time() + deadline_sec
-    try:
-        while time.time() < limit:
-            ready, _, _ = select.select([proc.stdout], [], [], 1.0)
-            if ready:
-                chunk = os.read(proc.stdout.fileno(), 65536)
+    chunks: list[bytes] = []
+    finished = threading.Event()
+
+    def reader() -> None:
+        # read1 は「今あるぶん」を返す。read だと 65536 バイト溜まるまで戻らず、
+        # 出力が終わっているのに待ち続ける。
+        try:
+            while True:
+                chunk = proc.stdout.read1(65536)
                 if not chunk:
                     break
-                buffer += chunk
-                if b"</html>" in buffer:
+                chunks.append(chunk)
+                if b"</html>" in b"".join(chunks[-2:]):
                     break
-            elif proc.poll() is not None:
-                break
-    finally:
-        proc.kill()
-        proc.wait(timeout=5)
-    return buffer.decode("utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    finished.wait(deadline_sec)
+    proc.kill()
+    proc.wait(timeout=5)
+    return b"".join(chunks).decode("utf-8", errors="replace")
 
 
 def main() -> None:
