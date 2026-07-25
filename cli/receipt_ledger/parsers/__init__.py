@@ -8,10 +8,9 @@
   2. 下の PARSERS に登録する
 金額抽出・集計・出力は触らない。
 
-追加候補(実データで確認済みの分布):
-  Steam           noreply@steampowered.com
-  PlayStation     reply@txn-email.playstation.com
-  Xsolla          mailer@xsolla.com
+対応できないと確認済みのもの:
+  Steam        メール本文に明細が無く、リンク先の Web ページにしかない
+  Nintendo     残高チャージの通知で、商品名がそもそも存在しない
 """
 
 from __future__ import annotations
@@ -20,11 +19,15 @@ from .base import ParsedReceipt, ReceiptParser
 from .apple import AppleParser
 from .google_play import GooglePlayParser
 from .paypal import PayPalParser
+from .playstation import PlayStationParser
+from .xsolla import XsollaParser
 
 PARSERS: list[ReceiptParser] = [
     PayPalParser(),
     GooglePlayParser(),
     AppleParser(),
+    XsollaParser(),
+    PlayStationParser(),
 ]
 
 

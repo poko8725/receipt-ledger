@@ -753,6 +753,10 @@
 
 function decodeMimeWord(str) {
   if (!str) return "";
+  // RFC 2047: 隣り合う encoded-word の間の空白・改行は区切りであって本文ではない。
+  // 長い日本語の件名や差出人名は複数の encoded-word に分割されて届くため、
+  // ここを詰めないと「なんでも酒やカ クヤス」のように語の途中へ空白が入る。
+  str = str.replace(/\?=[ \t]*(?:\r?\n[ \t]*)?=\?/g, "?==?");
   const re = /=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi;
   return str.replace(re, (_, charset, enc, text) => {
     try {
@@ -1126,6 +1130,11 @@ const AP_LAYOUT_OLD = /-{10,}\s*([^\n¥￥]{1,60}?)\s*[¥￥]\s*[\d,]+/;
 const AP_LAYOUT_NEW = /App\s*Store\s*\n\s*([^\n]{1,80}?)\s*\n\s*([^\n]{1,80}?)\s*\n\s*(?:アプリ内課金|App内課金|自動更新)/;
 // 「8980水晶」「毎月更新 ジュエル 7500個」はアプリ名ではない
 const AP_ITEM_LIKE = /^(?:\d|毎月更新|年間|月額)|(?:個|水晶|ジュエル|パック|チケット)$/;
+// Xsolla: 「製品」欄にタイトルが直接入っている
+const XS_PRODUCT = /製品\s+([\s\S]{1,60}?)\s+企業/;
+const XS_ITEM = /購入[:：]\s*[¥￥]\s*[\d,]+\s+([\s\S]{1,60}?)\s+[¥￥]/;
+// PlayStation: 「詳細 価格」の直後が商品名
+const PS_DETAIL = /詳細\s+価格\s+([\s\S]{1,70}?)\s+(?:定額サービス|小計|合計|[¥￥])/;
 
 function isSeparator(text) {
   const s = (text || "").trim();
@@ -1196,6 +1205,33 @@ function parseReceipt(sender, subject, body) {
     if (app && (isSeparator(app) || AP_ITEM_LIKE.test(app))) { item = app; app = ""; }
     if (app || item) {
       return { merchant: (app || "Apple").slice(0, 60), item: item.slice(0, 60) };
+    }
+  }
+
+  // --- Xsolla ---
+  // ゲーム内課金の決済代行。「製品」欄にタイトルが入っているので最も素直に取れる。
+  if (from.includes("xsolla") || body.includes("Xsolla")) {
+    const m = XS_PRODUCT.exec(body);
+    if (m) {
+      const product = m[1].split(/\s+/).join(" ");
+      if (product && !product.toLowerCase().startsWith("xsolla")) {
+        const i = XS_ITEM.exec(body);
+        return { merchant: product.slice(0, 60), item: i ? i[1].split(/\s+/).join(" ").slice(0, 60) : "" };
+      }
+    }
+  }
+
+  // --- PlayStation Store ---
+  // 送信元が常に同じなので、そのままだと全件「PlayStation」に潰れる。
+  if (from.includes("playstation") || body.includes("PlayStation\u2122Store")) {
+    const m = PS_DETAIL.exec(body);
+    if (m) {
+      const title = m[1].split(/\s+/).join(" ");
+      if (title) {
+        // 「商品名 : 内訳」の形なので、コロンの前を請求元にする
+        const merchant = title.includes(":") ? title.split(":")[0].trim() : title;
+        return { merchant: (merchant || title).slice(0, 60), item: title.slice(0, 60) };
+      }
     }
   }
 
