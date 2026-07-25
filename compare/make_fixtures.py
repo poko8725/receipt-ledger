@@ -69,15 +69,21 @@ def iso2022jp_escape() -> bytes:
 
 
 # ---------------------------------------------------------------- 02
-def html_entity_yen() -> bytes:
-    """&yen; を解決しないと通貨記号が見つからない。
+def html_entity_amount() -> bytes:
+    """実体参照を解決しないと、通貨記号を見失って別の数字を拾う。
 
-    加えて、表のセルをタグごと落として連結すると「合計&yen;12,000」になり、
-    ラベルと値がくっついて読めなくなる。タグは空白に置き換えるのが正しい。
+    最初は「&yen;12,000 JPY」で書いていたが、これは**解決しなくても通ってしまう**。
+    ラベルと数字の間の実体参照を読み飛ばしても、12,000 と JPY が残るためである。
+    prove.py に欠陥を戻させて初めて、このフィクスチャが何も検査していないと分かった。
+
+    通貨記号そのものを実体参照にすると、解決の有無が結果を変える。
+
+        解決する   : 「合計 $43.00」  → USD 43
+        解決しない : 「合計 &#36;43.00」→ 通貨記号が無いので "36" を金額として拾う
     """
     html = (
         "<html><body><table>"
-        "<tr><td>ご請求金額</td><td>&yen;12,000 JPY</td></tr>"
+        "<tr><td>合計</td><td>&#36;43.00</td></tr>"
         "<tr><td>お支払い方法</td><td>クレジットカード</td></tr>"
         "</table></body></html>\n"
     )
@@ -248,15 +254,47 @@ def timezone_boundary() -> bytes:
     return head + "合計 ¥1,100\n".encode("utf-8")
 
 
+# ---------------------------------------------------------------- 09
+def html_cell_boundary() -> bytes:
+    """タグを空白に置き換えず削除すると、隣のセルの数字と連結する。
+
+    表組みの領収書で、金額の直前のセルが数字で終わっていると事故になる。
+
+        空白に置換 : 「1,234 5,600円」 → 5,600 を拾う
+        削除       : 「1,2345,600円」  → 12,345,600 を拾う
+
+    ラベル（合計・ご請求金額など）を置いていないのは、ラベルがあると
+    そちらから読めてしまい、この欠陥を踏まなくなるため。
+    """
+    html = (
+        "<html><body><table>"
+        "<tr><th>ポイント</th><th>金額</th></tr>"
+        "<tr><td>1,234</td><td>5,600円</td></tr>"
+        "</table></body></html>\n"
+    )
+    head = crlf(
+        "From: Example Mart <receipt@mart.example>\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?" + base64.b64encode("お買い上げ明細".encode()).decode() + "?=\n"
+        "Date: Tue, 20 Jan 2026 15:00:00 +0900\n"
+        "Message-ID: <fixture-09@example.invalid>\n"
+        "Content-Type: text/html; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    return head + html.encode("utf-8")
+
+
 FIXTURES = {
     "01-iso2022jp-escape.eml": iso2022jp_escape,
-    "02-html-entity-yen.eml": html_entity_yen,
+    "02-html-entity-amount.eml": html_entity_amount,
     "03-mime-word-split.eml": mime_word_split,
     "04-proxy-merchant.eml": proxy_merchant,
     "05-base64-utf8.eml": base64_utf8,
     "06-qp-iso2022jp.eml": qp_iso2022jp,
     "07-nested-multipart.eml": nested_multipart,
     "08-timezone-boundary.eml": timezone_boundary,
+    "09-html-cell-boundary.eml": html_cell_boundary,
 }
 
 
