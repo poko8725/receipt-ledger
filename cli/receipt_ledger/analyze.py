@@ -30,11 +30,23 @@ class Record:
     sender: str
     subject: str
     merchant: str
+    """表示用の請求元。運営会社名がタイトルに置き換わっていることがある。"""
+
+
     item: str
     amount: Decimal
     currency: str = "JPY"
     mailbox: str = ""
     message_id: str = ""
+
+    billed_by: str = ""
+    """タイトルで上書きする前の請求元。取引の相手方を出したいときはこちら。
+
+    支出の内訳を見る用途では、運営会社名より作品名のほうが有用なので merchant を
+    置き換えている。一方、証憑の索引のように**取引の相手方**が要る用途では、
+    商品名が入っていると使えない。同じ「請求元」でも用途で定義が違うので、
+    置き換える前の値を捨てずに残す。
+    """
 
 
 def decode_mime_words(s: str) -> str:
@@ -140,6 +152,7 @@ def analyze(message: RawMessage) -> Record | None:
     # 品目で引けないときは請求元名でも引く。アプリ名の位置に
     # 課金アイテム名が入っている領収書があり(「キャンペーン水晶5」など)、
     # そのままだとアイテム名が請求元として並んでしまう。
+    billed_by = merchant
     title = title_from_item(item) or title_from_item(merchant)
     if title:
         merchant = title
@@ -152,6 +165,7 @@ def analyze(message: RawMessage) -> Record | None:
         sender=sender,
         subject=subject,
         merchant=merchant,
+        billed_by=billed_by,
         item=item,
         message_id=message_id,
         amount=amount,
