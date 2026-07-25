@@ -819,6 +819,10 @@
 </div>
 
 <script>
+// === 照合対象ここから ===
+// この印から「照合対象ここまで」までを compare/ のハーネスが切り出し、
+// Python 実装と同じ入力を流して1件ずつ突き合わせる。
+// ここに DOM や画面状態に触る処理を入れると照合が回らなくなる。
 // ============ MIME / eml パース ============
 
 function decodeMimeWord(str) {
@@ -1434,6 +1438,26 @@ function parseDateHeader(dateStr) {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// Date ヘッダは自分のタイムゾーンを持っている(例: +0900)。
+// これを UTC に直してから日付にすると、日本時間の早朝に届いたメールが前日に落ちる。
+// 手元の実データでは 3,611 通中 345 通(9.6%)がずれ、うち 18 通は月を、9 通は年をまたいだ。
+// 集計の単位は月なので、書かれているタイムゾーンのままの日付を使う。
+// toISOString() は UTC を返すので、そのぶんずらしてから日付部分だけ取る。
+function dateOnlyFromHeader(dateStr) {
+  const d = parseDateHeader(dateStr);
+  if (!d) return null;
+  const m = /([+-])(\d{2})(\d{2})\s*$/.exec(String(dateStr).trim());
+  if (!m) {
+    // タイムゾーンが書かれていないものは、書かれた時刻をそのまま日付として扱う
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` +
+           `-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  const offsetMin = (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]));
+  return new Date(d.getTime() + offsetMin * 60000).toISOString().slice(0, 10);
+}
+
+// === 照合対象ここまで ===
+
 // ============ ファイル読み込み & 集計 ============
 
 function readFileAsBinaryString(file) {
@@ -1518,10 +1542,9 @@ async function handleFiles(fileList) {
       const found = extractAmount(subject) ?? extractAmount(body);
       if (found === null) { skipped++; continue; }
       const { merchant, item } = resolveMerchant(from, subject, body);
-      const d = parseDateHeader(date);
       records.push({
         file: file.name,
-        date: d ? d.toISOString().slice(0, 10) : "不明",
+        date: dateOnlyFromHeader(date) ?? "不明",
         merchant, item, amount: found.amount, currency: found.currency,
         subject, sender: from,
       });
@@ -2118,11 +2141,10 @@ document.getElementById("loadSample").addEventListener("click", () => {
     const parsed = parseEml(raw);
     const found = extractAmount(parsed.subject) ?? extractAmount(parsed.body);
     if (found === null) { skipped++; continue; }
-    const d = parseDateHeader(parsed.date);
     const resolved = resolveMerchant(parsed.from, parsed.subject, parsed.body);
     allRecords.push({
       file: "サンプル",
-      date: d ? d.toISOString().slice(0, 10) : "不明",
+      date: dateOnlyFromHeader(parsed.date) ?? "不明",
       merchant: resolved.merchant, item: resolved.item,
       amount: found.amount, currency: found.currency,
       subject: parsed.subject, sender: parsed.from,
