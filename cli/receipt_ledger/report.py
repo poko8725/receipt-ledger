@@ -13,6 +13,23 @@ from typing import Iterable
 from .analyze import Record
 from .rules import category_of, format_money
 
+# 表計算ソフトは先頭が = + - @ のセルを数式として解釈する。
+# 請求元名も品目もメール由来＝第三者が送り込める値なので、
+# そのまま書くと「CSV を開いただけで数式が走る」状態になる。
+# この道具は「Excel で開く」ことを前提にしているので、直撃する。
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(value):
+    """数式として解釈されうるセルの先頭に ' を付ける。
+
+    Excel は先頭の ' を「以降は文字列」の印として扱い、表示もしない。
+    値そのものは壊さずに、実行だけを止められる。
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_LEAD):
+        return "'" + value
+    return value
+
 
 def totals_by_merchant(
     records: Iterable[Record],
@@ -61,11 +78,11 @@ def write_summary_csv(path: Path, records: list[Record]) -> None:
     # Excel が UTF-8 と認識できるよう BOM 付きにする
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
-        w.writerow(["カテゴリ", "請求元", "通貨", "合計金額", "件数", "平均単価"])
+        w.writerow([csv_safe(v) for v in ["カテゴリ", "請求元", "通貨", "合計金額", "件数", "平均単価"]])
         for (merchant, currency) in sorted(totals, key=lambda k: (k[1], -totals[k])):
             total, count = totals[(merchant, currency)], counts[(merchant, currency)]
-            w.writerow([category_of(merchant), merchant, currency, total, count,
-                        (total / count).quantize(total)])
+            w.writerow([csv_safe(v) for v in [category_of(merchant), merchant, currency, total, count,
+                        (total / count).quantize(total)]])
 
 
 def write_detail_csv(path: Path, records: list[Record]) -> None:

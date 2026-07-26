@@ -1033,7 +1033,9 @@ const DEFAULT_CURRENCY = "JPY";  // 通貨表記が無いとき。日本のレ�
 // 小数あり($12.34)と2桁以上の整数(3,980)の両方。
 // 整数側は「数字で始まり数字で終わる」で桁数を担保する
 // (\d{2} 始まりだと 3,980 の "3," で落ちる)。
-const _NUM = String.raw`(?:\d[\d,]*\.\d{1,2}|\d[\d,]*\d)`;
+// 繰り返しに上限を置いているのは ReDoS 対策。[\d,]* にすると、小数点を
+// 含まない長い数字列で破綻する（2万文字で約10秒）。金額が20桁を超えることは無い。
+const _NUM = String.raw`(?:\d[\d,]{0,19}\.\d{1,2}|\d[\d,]{0,19}\d)`;
 const _PRE = String.raw`(?:US\$|[¥￥$€£]|USD|JPY|EUR|GBP)`;
 const _SUF = String.raw`(?:円|USD|JPY|EUR|GBP)`;
 const _LABEL = String.raw`(?:合計金額|合計|ご請求金額|ご利用金額|お支払金額|お支払い金額|決済金額|請求額|総額` +
@@ -1651,7 +1653,7 @@ function renderResults(skipped) {
   const sorted = [...visible].sort((a, b) => (a.date < b.date ? 1 : -1));
   detailList.innerHTML = sorted.map(r => `
     <div class="detail-item">
-      <div class="left"><span class="date">${r.date}</span>${escapeHtml(r.merchant)} — ${escapeHtml(r.item || r.subject).slice(0, 44)}</div>
+      <div class="left"><span class="date">${r.date}</span>${escapeHtml(r.merchant)} — ${escapeHtml((r.item || r.subject).slice(0, 44))}</div>
       <div class="right">${formatMoney(r.amount, r.currency)}</div>
     </div>
   `).join("");
@@ -1728,9 +1730,18 @@ function escapeHtml(str) {
 
 // ============ CSV 書き出し ============
 
+// 表計算ソフトは先頭が = + - @ のセルを数式として解釈する。
+// 請求元名も品目もメール由来＝第三者が送り込める値なので、そのまま書くと
+// 「CSV を開いただけで数式が走る」状態になる。Excel で開く前提の道具なので直撃する。
+// 先頭に ' を付けると Excel は「以降は文字列」と解釈し、表示もしない。
+function csvSafe(value) {
+  const s = String(value ?? "");
+  return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+}
+
 function toCsv(rows) {
   return rows.map(row => row.map(cell => {
-    const s = String(cell ?? "");
+    const s = csvSafe(cell);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }).join(",")).join("\r\n");
 }

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import imaplib
 import os
+import ssl
 from datetime import datetime
 from typing import Iterator
 
@@ -126,7 +127,11 @@ class ImapSource:
         if self._conn is not None:
             return self._conn
         try:
-            conn = imaplib.IMAP4_SSL(self.host)
+            # imaplib は ssl_context を渡さないと ssl._create_stdlib_context() を使い、
+            # **check_hostname=False / verify_mode=CERT_NONE** になる。
+            # 証明書を検証しないので、中間者にアプリパスワードを渡しうる。
+            # 既定に任せず、検証する文脈を明示する。
+            conn = imaplib.IMAP4_SSL(self.host, ssl_context=ssl.create_default_context())
             conn.login(self.user, self.password)
         except imaplib.IMAP4.error as e:
             # 例外に資格情報が混ざらないよう、メッセージは自分で組み立てる
