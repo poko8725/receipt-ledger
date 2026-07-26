@@ -163,6 +163,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         records, scanned, skipped, filtered, duplicated = collect(source, args)
+    except SourceUnavailable as e:
+        # check() だけでなく、走査中にも SourceUnavailable は出る
+        # (フォルダ名が違うなど、接続してみないと分からないもの)。
+        # ここで捕まえないと、せっかく書いた案内が出ずにトレースバックだけが見える。
+        print(f"エラー: {e}", file=sys.stderr)
+        hint = getattr(e, "hint", None)
+        if hint:
+            print(f"\n{hint}", file=sys.stderr)
+        return 1
     finally:
         # IMAP は同時接続数に上限がある(Gmail は 15)。logout せずに繰り返すと詰まる。
         close = getattr(source, "close", None)
