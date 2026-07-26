@@ -14,13 +14,15 @@ from .analyze import Record, UnsupportedFormat, analyze
 from .console import enable_utf8_output
 from .report import print_summary, write_detail_csv, write_summary_csv
 from .rules import canonicalize_merchants
-from .sources import SOURCES, AppleMailSource, EmlDirSource, SourceUnavailable
+from .sources import SOURCES, AppleMailSource, EmlDirSource, ImapSource, SourceUnavailable
 
 
 def build_source(args: argparse.Namespace):
     """--source の名前から実体を組み立てる。ソースを足すときはここに1分岐。"""
     if args.source == "apple-mail":
         return AppleMailSource(mail_dir=Path(args.mail_dir) if args.mail_dir else None)
+    if args.source == "imap":
+        return ImapSource(folder=args.imap_folder, since=args.since)
     if args.source == "eml-dir":
         if not args.input_dir:
             sys.exit("エラー: --source eml-dir には --input-dir が必要です")
@@ -36,6 +38,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         epilog="使えるソース:\n"
         + "\n".join(f"  {k:<12} {v}" for k, v in SOURCES.items()),
     )
+    p.add_argument("--imap-folder", default="INBOX",
+                   help="IMAP のフォルダ名。--list-folders の出力をそのまま渡す")
+    p.add_argument("--list-folders", action="store_true",
+                   help="IMAP のフォルダ一覧を出して終わる")
     p.add_argument("--source", default="apple-mail", choices=list(SOURCES),
                    help="メールの取得元 (既定: apple-mail)")
     p.add_argument("--input-dir", help="--source eml-dir のときの .eml フォルダ")
@@ -125,6 +131,14 @@ def main(argv: list[str] | None = None) -> int:
         if e.hint:
             print(f"\n{e.hint}", file=sys.stderr)
         return 1
+
+    if args.list_folders:
+        if not isinstance(source, ImapSource):
+            sys.exit("--list-folders は --source imap のときだけ使えます")
+        for name in source.list_folders():
+            print(name)
+        source.close()
+        return 0
 
     if not args.quiet:
         print(f"ソース: {source.name}", file=sys.stderr)
