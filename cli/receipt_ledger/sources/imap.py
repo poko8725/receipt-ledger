@@ -43,6 +43,23 @@ from .base import MailSource, RawMessage, SourceUnavailable
 
 DEFAULT_HOST = "imap.gmail.com"
 
+# IMAP は英語3文字の月名を要求する。strftime("%b") はロケールに従うので、
+# locale.setlocale(LC_TIME, "") を誰かが呼んだ瞬間に "01-1-2026" になって壊れる。
+# 呼ばれない前提に寄りかからず、自前の表を使う。
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def imap_date(value: str) -> str:
+    """YYYY-MM-DD を IMAP の SEARCH が受け取る形式にする。
+
+    書式が違えば例外にする。**黙って ALL に落とさない。**
+    落とすと「サーバから全件取ってきて、手元で全件捨てる」という
+    一番遅くて一番間違った動きになり、0 件が返る理由も分からなくなる。
+    """
+    day = datetime.strptime(value, "%Y-%m-%d")   # 不正なら ValueError
+    return f"{day.day:02d}-{_MONTHS[day.month - 1]}-{day.year}"
+
 
 def encode_folder(name: str) -> str:
     """フォルダ名を修正 UTF-7 (RFC 3501) にする。
@@ -158,11 +175,7 @@ class ImapSource:
         # 日付の絞り込みはサーバ側でやる。全件取ってから捨てるのは無駄。
         criteria = "ALL"
         if self.since:
-            try:
-                day = datetime.strptime(self.since, "%Y-%m-%d")
-                criteria = f'(SINCE "{day.strftime("%d-%b-%Y")}")'
-            except ValueError:
-                pass
+            criteria = f'(SINCE "{imap_date(self.since)}")'
 
         ok, data = conn.search(None, criteria)
         if ok != "OK":

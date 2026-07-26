@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from .analyze import Record, UnsupportedFormat, analyze
@@ -15,6 +16,23 @@ from .console import enable_utf8_output
 from .report import print_summary, write_detail_csv, write_summary_csv
 from .rules import canonicalize_merchants
 from .sources import SOURCES, AppleMailSource, EmlDirSource, ImapSource, SourceUnavailable
+
+
+def ymd(value: str) -> str:
+    """--since / --until の書式を受け取った時点で検証する。
+
+    ここを素通しすると、下流の文字列比較が静かに壊れる。
+    "2026-07-24" < "2026/01/01" は ASCII で '-' < '/' なので True になり、
+    **全件が「期間より前」と判定されて 0 件になる**。しかも例外が出ないので、
+    利用者は解析ルールのほうを疑うことになる。
+    """
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"日付は YYYY-MM-DD で指定してください（受け取った値: {value}）"
+        ) from None
+    return value
 
 
 def build_source(args: argparse.Namespace):
@@ -46,8 +64,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="メールの取得元 (既定: apple-mail)")
     p.add_argument("--input-dir", help="--source eml-dir のときの .eml フォルダ")
     p.add_argument("--mail-dir", help="Mail.app のデータ位置を上書きする(検証用)")
-    p.add_argument("--since", metavar="YYYY-MM-DD", help="この日以降のメールだけ対象にする")
-    p.add_argument("--until", metavar="YYYY-MM-DD", help="この日以前のメールだけ対象にする")
+    p.add_argument("--since", type=ymd, metavar="YYYY-MM-DD", help="この日以降のメールだけ対象にする")
+    p.add_argument("--until", type=ymd, metavar="YYYY-MM-DD", help="この日以前のメールだけ対象にする")
     p.add_argument("--output", default="summary.csv", help="集計CSVの出力先")
     p.add_argument("--detail-output", help="明細CSVも出す場合のパス")
     p.add_argument("--quiet", action="store_true", help="進捗表示を出さない")
@@ -143,12 +161,24 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet:
         print(f"ソース: {source.name}", file=sys.stderr)
 
-    records, scanned, skipped, filtered, duplicated = collect(source, args)
+    try:
+        records, scanned, skipped, filtered, duplicated = collect(source, args)
+    finally:
+        # IMAP は同時接続数に上限がある(Gmail は 15)。logout せずに繰り返すと詰まる。
+        close = getattr(source, "close", None)
+        if callable(close):
+            close()
 
     if not records:
         print("\n金額を抽出できたメールがありませんでした。", file=sys.stderr)
         if scanned == 0:
             print("メールが1通も見つかっていません。ソースの指定を確認してください。", file=sys.stderr)
+        elif filtered:
+            # 期間で落ちたぶんが多いのに解析ルールを疑わせると、
+            # 利用者は関係のない場所を探すことになる。原因の候補を正しい順に出す。
+            print(f"{scanned} 通を走査し、{filtered} 通が期間の指定で除外されました。"
+                  f"\n  --since / --until を外すか、範囲を広げて試してください。",
+                  file=sys.stderr)
         else:
             print(f"{scanned} 通を走査しましたが該当なしです。"
                   " rules.py の MERCHANT_RULES / AMOUNT_PATTERNS の調整が要るかもしれません。",
