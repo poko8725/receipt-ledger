@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .analyze import Record, analyze
+from .analyze import Record, UnsupportedFormat, analyze
 from .console import enable_utf8_output
 from .report import print_summary, write_detail_csv, write_summary_csv
 from .rules import canonicalize_merchants
@@ -51,6 +51,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def collect(source, args) -> tuple[list[Record], int, int, int, int]:
     records: list[Record] = []
     scanned = 0
+    unsupported: list[str] = []
     skipped = 0
     filtered = 0
     duplicated = 0
@@ -65,7 +66,12 @@ def collect(source, args) -> tuple[list[Record], int, int, int, int]:
             continue
         seen.add(message.uid)
 
-        record = analyze(message)
+        try:
+            record = analyze(message)
+        except UnsupportedFormat as e:
+            # 1件で止めない。読めなかったことは最後にまとめて知らせる。
+            unsupported.append(str(e))
+            continue
         if record is None:
             skipped += 1
             continue
@@ -94,6 +100,14 @@ def collect(source, args) -> tuple[list[Record], int, int, int, int]:
     alias = canonicalize_merchants([r.merchant for r in records])
     for r in records:
         r.merchant = alias.get(r.merchant, r.merchant)
+
+    if unsupported:
+        # 黙って件数だけ減らすと、利用者は「足りない」理由に辿り着けない。
+        print(f"\n読めない形式が {len(unsupported)} 件ありました:", file=sys.stderr)
+        for line in unsupported[:5]:
+            print(f"  {line.splitlines()[0]}", file=sys.stderr)
+        if len(unsupported) > 5:
+            print(f"  ... 他 {len(unsupported) - 5} 件", file=sys.stderr)
 
     return records, scanned, skipped, filtered, duplicated
 

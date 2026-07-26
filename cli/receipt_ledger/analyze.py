@@ -21,6 +21,10 @@ from .rules import extract_amount, identify_merchant, title_from_item
 from .sources.base import RawMessage
 
 
+class UnsupportedFormat(Exception):
+    """解析できない形式。黙って捨てずに、呼び出し側へ知らせる。"""
+
+
 @dataclass
 class Record:
     uid: str
@@ -113,8 +117,23 @@ def get_body_text(msg: email.message.Message) -> str:
     return text
 
 
+# OLE2 複合ファイルの署名。Outlook の .msg はこの形式で、RFC 822 ではない。
+# 拡張子を変えただけのものや、.msg をそのまま渡された場合にここで止まる。
+OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
 def analyze(message: RawMessage) -> Record | None:
-    """金額が取れなければ None(レシートとみなさない)。"""
+    """金額が取れなければ None(レシートとみなさない)。
+
+    .msg を渡されると、email モジュールは例外を投げずにヘッダ 0 件の
+    メッセージを返す。**黙って「解析できたが金額が無い」ように見える**ので、
+    形式の段階で弾く。経費処理で使う場合、静かに欠測するほうが害が大きい。
+    """
+    if message.raw[:8] == OLE2_MAGIC:
+        raise UnsupportedFormat(
+            f"{message.origin or message.uid} は .msg 形式（Outlook 独自）です。\n"
+            "  RFC 822 ではないので解析できません。.eml で書き出してください。"
+        )
     try:
         msg = email.message_from_bytes(message.raw)
     except Exception:

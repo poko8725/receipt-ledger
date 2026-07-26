@@ -6,6 +6,7 @@ Mail.app の「書き出す」やブラウザ版と同じ入力。
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Iterator
 
@@ -31,6 +32,16 @@ class EmlDirSource:
             )
 
     def iter_messages(self) -> Iterator[RawMessage]:
+        # Outlook から書き出すと .msg になることがある。読めないので拾わないが、
+        # 黙って無視すると「件数が足りない」理由が利用者に伝わらない。
+        others = sorted(self.input_dir.rglob("*.msg"))
+        if others:
+            print(
+                f"注意: .msg が {len(others)} 件あります。Outlook 独自形式なので読めません。\n"
+                "      .eml で書き出し直してください。",
+                file=sys.stderr,
+            )
+
         for path in sorted(self.input_dir.rglob("*.eml")):
             try:
                 raw = path.read_bytes()
