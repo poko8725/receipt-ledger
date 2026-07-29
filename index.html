@@ -1440,22 +1440,24 @@ function parseDateHeader(dateStr) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-// Date ヘッダは自分のタイムゾーンを持っている(例: +0900)。
-// これを UTC に直してから日付にすると、日本時間の早朝に届いたメールが前日に落ちる。
+// Date ヘッダは送信側のタイムゾーンで書かれている(例: +0900, -0700)。
+// これを UTC に直して日付にすると、日本時間の早朝に届いたメールが前日に落ちる。
 // 手元の実データでは 3,611 通中 345 通(9.6%)がずれ、うち 18 通は月を、9 通は年をまたいだ。
-// 集計の単位は月なので、書かれているタイムゾーンのままの日付を使う。
-// toISOString() は UTC を返すので、そのぶんずらしてから日付部分だけ取る。
+//
+// かといって書かれたオフセットのままの日付にすると、今度は**海外から届いた
+// 領収書がずれる**。-0700 の 7/15 10:43 は手元(JST)では 7/16 02:43 であって、
+// 期間で絞ると 7/16 の側から漏れる。
+//
+// 期間の指定も経費を締める月も見ている人の暦なので、そこに合わせる。
+// getFullYear() 等は閲覧環境のタイムゾーンで返るので、それを組み立てる
+// (toISOString() は UTC を返すので使えない)。
+// タイムゾーンが書かれていない Date は、new Date() が手元の時刻として
+// 解釈するため、書かれた時刻がそのまま日付になる。
 function dateOnlyFromHeader(dateStr) {
   const d = parseDateHeader(dateStr);
   if (!d) return null;
-  const m = /([+-])(\d{2})(\d{2})\s*$/.exec(String(dateStr).trim());
-  if (!m) {
-    // タイムゾーンが書かれていないものは、書かれた時刻をそのまま日付として扱う
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` +
-           `-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  const offsetMin = (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]));
-  return new Date(d.getTime() + offsetMin * 60000).toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` +
+         `-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 // === 照合対象ここまで ===

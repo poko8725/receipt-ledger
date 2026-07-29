@@ -1,11 +1,11 @@
 """日付のタイムゾーン差が、実際に何件に効いているかを数える。
 
-ブラウザ版は Date ヘッダを UTC に直して日付にしている(`toISOString()`)。
-CLI 版はメール自身のタイムゾーンのまま日付にしている。
-JST なら 00:00〜08:59 に届いたメールで、両者の日付が1日ずれる。
+今の両実装は、Date ヘッダを**手元のタイムゾーン**に直してから日付にする。
+これを UTC で日付にすると、JST なら 00:00〜08:59 に届いたメールで1日ずれる。
 
 問題は「ずれること」ではなく、**集計の単位である月や年をまたぐか**である。
-直すべきかどうかを、印象ではなくこの数で決める。
+直すべきかどうかを、印象ではなくこの数で決めた。以前に公開した数字が
+どちらの解釈で出たものかを確かめるときにも使う。
 
     cd ~/projects/receipt-ledger
     python3 compare/tz_impact.py                          # Mail.app を直接読む
@@ -77,8 +77,8 @@ def main() -> None:
         if dt is None:
             continue
 
-        local = dt.date()                                  # 修正後(メールのタイムゾーン)
-        utc = dt.astimezone(timezone.utc).date()           # 修正前(ブラウザ版が使っていた UTC)
+        local = dt.astimezone().date()                     # 今の解釈(手元のタイムゾーン)
+        utc = dt.astimezone(timezone.utc).date()           # 以前の解釈(UTC)
         total += 1
 
         for table, day in ((by_year_local, local), (by_year_utc, utc)):
@@ -110,7 +110,7 @@ def main() -> None:
     print()
     label = args.category or "全カテゴリ"
     print(f"年別（{label} / JPY のみ）")
-    print(f"{'年':<6}{'修正前(UTC)':>22}{'修正後':>22}   差")
+    print(f"{'年':<6}{'UTC で数える':>22}{'手元の暦で数える':>22}   差")
     changed = 0
     for year in sorted(set(by_year_local) | set(by_year_utc)):
         old_n, old_v = by_year_utc.get(year, [0, 0])

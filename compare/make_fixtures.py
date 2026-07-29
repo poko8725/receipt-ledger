@@ -239,7 +239,8 @@ def timezone_boundary() -> bytes:
     """日付が UTC 換算で前日になる時刻。
 
     +0900 の 08:30 は UTC では前日 23:30 になる。
-    どちらの日付で記録するかは実装の選択であって、揃っていなければ集計月がずれる。
+    両実装とも「読む人の暦」で日付にするので、日本で開けば 01-15 になる。
+    UTC に寄せる実装は 01-14 になり、ここで差が出る。
     """
     head = crlf(
         "From: Example Store <billing@store.example>\n"
@@ -285,6 +286,35 @@ def html_cell_boundary() -> bytes:
     return head + html.encode("utf-8")
 
 
+# ---------------------------------------------------------------- 10
+def foreign_offset_boundary() -> bytes:
+    """海外のオフセットで届き、手元の暦では翌日になる時刻。
+
+    08 の裏返し。08 は「UTC に寄せると前日に落ちる」形だが、こちらは
+    **書かれたオフセットのまま日付にすると前日に落ちる**形である。
+
+        -0700 の 7/15 10:43  =  UTC 7/15 17:43  =  JST 7/16 02:43
+
+    実際に踏んだ。この時刻に届いた PayPal の領収書6通(計 ¥3,780)が、
+    `--since 2026-07-16` で「期間より前」と判定されて落ちていた。
+    落ちても例外は出ず、合計が小さくなるだけなので気づきにくい。
+
+    どちらの解釈を採るかは実装の選択だが、2つの実装で食い違えば
+    ブラウザ版と CLI 版で違う数字が出る。
+    """
+    head = crlf(
+        "From: service@paypal.co.jp\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?" + base64.b64encode("ご請求内容".encode()).decode() + "?=\n"
+        "Date: Wed, 15 Jul 2026 10:43:00 -0700\n"
+        "Message-ID: <fixture-10@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    return head + "合計 ¥630\n".encode("utf-8")
+
+
 FIXTURES = {
     "01-iso2022jp-escape.eml": iso2022jp_escape,
     "02-html-entity-amount.eml": html_entity_amount,
@@ -295,6 +325,7 @@ FIXTURES = {
     "07-nested-multipart.eml": nested_multipart,
     "08-timezone-boundary.eml": timezone_boundary,
     "09-html-cell-boundary.eml": html_cell_boundary,
+    "10-foreign-offset-boundary.eml": foreign_offset_boundary,
 }
 
 

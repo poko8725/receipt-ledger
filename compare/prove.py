@@ -75,13 +75,30 @@ DEFECTS = [
         "    if (html) bodyText = htmlToText(html.text);\n"
         "    else if (plain) bodyText = plain.text;",
     ),
+    # 日付まわりの2つは、手元のタイムゾーンによって効くフィクスチャが入れ替わる。
+    # 両実装とも「読む人の暦」で日付にするので、UTC の機械で回すと
+    # 「UTC に寄せる」は変化を起こせず見逃しになる。これは入力の不足ではなく、
+    # その機械では区別のしようがないためで、フィクスチャを足しても埋まらない。
     (
         "日付を UTC に寄せる",
-        "Date ヘッダのタイムゾーンを捨てる",
+        "読む人の暦ではなく UTC で日付にする",
         "function dateOnlyFromHeader(dateStr) {",
         "function dateOnlyFromHeader(dateStr) {\n"
         "  { const _d = parseDateHeader(dateStr);\n"
         "    return _d ? _d.toISOString().slice(0, 10) : null; }",
+    ),
+    (
+        "書かれたオフセットのままの日付にする",
+        "海外から届いた領収書が、手元の暦より1日前になる",
+        "function dateOnlyFromHeader(dateStr) {",
+        "function dateOnlyFromHeader(dateStr) {\n"
+        "  { const _d = parseDateHeader(dateStr);\n"
+        "    if (!_d) return null;\n"
+        "    const _m = /([+-])(\\d{2})(\\d{2})\\s*$/.exec(String(dateStr).trim());\n"
+        "    if (_m) {\n"
+        "      const _o = (_m[1] === '-' ? -1 : 1) * (Number(_m[2]) * 60 + Number(_m[3]));\n"
+        "      return new Date(_d.getTime() + _o * 60000).toISOString().slice(0, 10);\n"
+        "    } }",
     ),
 ]
 

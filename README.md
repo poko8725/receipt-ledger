@@ -94,9 +94,20 @@ cd cli && python3 -m receipt_ledger --source eml-dir --input-dir ./exported_mail
 | オプション | 内容 |
 |---|---|
 | `--source` | `apple-mail`（既定） / `eml-dir` |
-| `--since` / `--until` | `YYYY-MM-DD` で期間を絞る |
+| `--since` / `--until` | `YYYY-MM-DD` で期間を絞る（手元のタイムゾーンの日付で判定します） |
 | `--output` | 集計 CSV の出力先（既定 `summary.csv`） |
 | `--detail-output` | 明細 CSV も出す |
+
+日付は**受け取った人のタイムゾーン**に直してから扱います。領収書は
+`-0700` のように送信側のタイムゾーンで届くので、書かれたままの日付で
+期間を判定すると、手元の暦では範囲に入っているメールが静かに落ちます。
+明細 CSV の「日付」列も同じ基準です。
+
+### テスト
+
+```bash
+cd cli && python3 -m unittest discover tests
+```
 
 ### 取得元を増やす
 
