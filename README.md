@@ -89,14 +89,35 @@ cd cli && python3 -m receipt_ledger --source apple-mail --since 2026-01-01 --out
 cd cli && python3 -m receipt_ledger --source eml-dir --input-dir ./exported_mails
 ```
 
+IMAP で取りに行くこともできます（OS を問わず、書き出し作業も不要）。
+
+```bash
+export IMAP_USER='自分のアドレス'
+export IMAP_PASS='アプリパスワード'
+cd cli && python3 -m receipt_ledger --source imap --since 2026-01-01
+```
+
+**資格情報は保存しません。** 環境変数からしか読まず、設定ファイルにも OS の
+資格情報ストアにも書きません。アプリパスワードは2段階認証を有効にしてから
+発行してください（`IMAP_HOST` の既定は `imap.gmail.com`）。
+取りに行く先は元々自分のメールが置いてあるサーバなので、第三者へは何も送っていません。
+
+フォルダ名は `--list-folders` の出力をそのまま `--imap-folder` に渡すのが確実です。
+日本語のフォルダ名は修正 UTF-7 で表されるため、見た目と一致しません。
+
+IMAP が閉じている Exchange Online 環境には対応していません（OAuth とアプリ登録、
+管理者同意まで必要になるため）。その場合は `.eml` を書き出して `--source eml-dir` を使ってください。
+
 主なオプション:
 
 | オプション | 内容 |
 |---|---|
-| `--source` | `apple-mail`（既定） / `eml-dir` |
+| `--source` | `apple-mail`（既定） / `eml-dir` / `imap` |
 | `--since` / `--until` | `YYYY-MM-DD` で期間を絞る（手元のタイムゾーンの日付で判定します） |
 | `--output` | 集計 CSV の出力先（既定 `summary.csv`） |
 | `--detail-output` | 明細 CSV も出す |
+| `--imap-folder` | IMAP のフォルダ名（既定 `INBOX`） |
+| `--list-folders` | IMAP のフォルダ一覧を出して終わる |
 
 日付は**受け取った人のタイムゾーン**に直してから扱います。領収書は
 `-0700` のように送信側のタイムゾーンで届くので、書かれたままの日付で
