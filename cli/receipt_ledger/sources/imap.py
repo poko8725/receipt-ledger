@@ -37,7 +37,7 @@ from __future__ import annotations
 import imaplib
 import os
 import ssl
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterator
 
 from .base import MailSource, RawMessage, SourceUnavailable
@@ -51,7 +51,7 @@ _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
-def imap_date(value: str) -> str:
+def imap_date(value: str, shift_days: int = 0) -> str:
     """YYYY-MM-DD を IMAP の SEARCH が受け取る形式にする。
 
     書式が違えば例外にする。**黙って ALL に落とさない。**
@@ -59,6 +59,7 @@ def imap_date(value: str) -> str:
     一番遅くて一番間違った動きになり、0 件が返る理由も分からなくなる。
     """
     day = datetime.strptime(value, "%Y-%m-%d")   # 不正なら ValueError
+    day += timedelta(days=shift_days)
     return f"{day.day:02d}-{_MONTHS[day.month - 1]}-{day.year}"
 
 
@@ -178,9 +179,15 @@ class ImapSource:
             )
 
         # 日付の絞り込みはサーバ側でやる。全件取ってから捨てるのは無駄。
+        # ただし1日ぶん手前から取る。SINCE はサーバが持つ内部日付を
+        # 「時刻とタイムゾーンを無視して」比べる規定(RFC 3501)なので、
+        # 手元の暦では指定日に入るメールが、サーバ側では前日として弾かれうる。
+        # ここで弾かれると、手元でタイムゾーンを直しても取り返せない。
+        # タイムゾーンの差は最大でも26時間＝日付で1日なので、1日で足りる。
+        # 余分に取った分は collect() が record.date で正しく落とす。
         criteria = "ALL"
         if self.since:
-            criteria = f'(SINCE "{imap_date(self.since)}")'
+            criteria = f'(SINCE "{imap_date(self.since, shift_days=-1)}")'
 
         ok, data = conn.search(None, criteria)
         if ok != "OK":

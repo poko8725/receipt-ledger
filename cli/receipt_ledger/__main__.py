@@ -109,6 +109,8 @@ def collect(source, args) -> tuple[list[Record], int, int, int, int]:
                 continue
             seen.add(record.message_id)
         # 日付での絞り込みは Date ヘッダを見てから。日付不明のものは落とさない。
+        # record.date は手元のタイムゾーンに直した日付なので、--since / --until に
+        # 書いた日付と同じ暦で比べられる(analyze.local_datetime を参照)。
         if record.date != "不明":
             if (args.since and record.date < args.since) or (
                 args.until and record.date > args.until

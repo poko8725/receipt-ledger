@@ -29,7 +29,11 @@ class UnsupportedFormat(Exception):
 class Record:
     uid: str
     origin: str
+
     date: str
+    """YYYY-MM-DD。**手元のタイムゾーンでの日付**で、Date ヘッダに書かれた
+    ままの日付ではない。期間の絞り込みも月別集計もこの値を使う。"""
+
     month: str
     sender: str
     subject: str
@@ -67,6 +71,36 @@ def decode_mime_words(s: str) -> str:
         else:
             decoded += text
     return decoded
+
+
+def local_datetime(value: object) -> datetime | None:
+    """Date ヘッダを手元のタイムゾーンの日時にする。読めなければ None。
+
+    Date ヘッダは送信側のタイムゾーンで書かれている。米国の事業者からの
+    領収書なら `-0700` のように届くので、**書かれた日付をそのまま使うと
+    利用者の暦とずれる**。実際に -0700 の 7/15 10:43〜10:59 に届いた
+    PayPal の領収書6通(JST では 7/16 02:43〜02:59)が、
+    `--since 2026-07-16` で「期間より前」と判定されて落ちた。
+
+    利用者が --since に書く日付も、経費を締める月も手元の暦なので、
+    そちらに合わせる。tzinfo が無い Date(`-0000` や記載なし)は
+    astimezone() が手元のタイムゾーンとみなすため、日付は動かない。
+    """
+    # Date に非 ASCII が混じっていると get() は str ではなく Header を返し、
+    # parsedate_to_datetime が AttributeError で落ちる(1通で全体が止まる)。
+    # 読めない日付は「不明」で通ればよいので、文字列にしてから渡す。
+    try:
+        dt = parsedate_to_datetime(str(value))
+    except (TypeError, ValueError):
+        return None
+    if dt is None:      # 版によっては例外ではなく None が返る
+        return None
+    try:
+        return dt.astimezone()
+    except (OverflowError, OSError, ValueError):
+        # 極端な日付(西暦9999年など)は、手元の暦へ直すと表現範囲を外れる。
+        # 日付が無いものとして扱う(この後の絞り込みでは落とさない側に倒れる)。
+        return None
 
 
 def _decode_bytes(raw: bytes, charset: str | None) -> str:
@@ -143,11 +177,7 @@ def analyze(message: RawMessage) -> Record | None:
     sender = decode_mime_words(msg.get("From", ""))
     subject = decode_mime_words(msg.get("Subject", ""))
 
-    dt: datetime | None
-    try:
-        dt = parsedate_to_datetime(msg.get("Date", ""))
-    except (TypeError, ValueError):
-        dt = None
+    dt = local_datetime(msg.get("Date", ""))
 
     # 件名を先に見る。件名に金額があるものは信頼度が高い。
     # `or` ではなく None 判定にしないと、金額 0 円のときに本文へ落ちてしまう。
