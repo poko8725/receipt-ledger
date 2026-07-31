@@ -52,8 +52,8 @@ jobs:
         run: |
           count=$(grep -c '\.\.\. ok$' "${RUNNER_TEMP}/result.txt" || true)
           echo "通ったテスト: ${count} 件"
-          if [ "${count}" -lt 21 ]; then
-            echo "::error::通ったテストが 21 件を下回った。テストが消えたか、まとめて skip された可能性がある"
+          if [ "${count}" -lt 44 ]; then
+            echo "::error::通ったテストが 44 件を下回った。テストが消えたか、まとめて skip された可能性がある"
             exit 1
           fi
 
