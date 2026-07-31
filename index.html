@@ -137,6 +137,30 @@
   }
   .privacy-note b { color: var(--ink-soft); }
 
+  .colophon { margin-top: 48px; padding-top: 24px; border-top: 1px solid #d8d2c4; font-size: 13px; line-height: 1.8; color: #4a4a4a; }
+  .colophon section { margin-bottom: 22px; }
+  .colophon h2 { font-size: 14px; margin: 0 0 8px; color: #2a2a2a; }
+  .colophon p { margin: 0 0 8px; }
+  .colophon a { color: #1f5f8b; }
+  .colophon ul { margin: 0 0 10px; padding-left: 20px; }
+  .colophon li { margin-bottom: 3px; }
+  /* 主（経費版の告知）と副（本）で強さを変える。並列に見えると視線の順番が決まらない */
+  .colophon-primary {
+    background: var(--card);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 18px 22px 16px;
+  }
+  .colophon-primary h2 { font-size: 15px; }
+  .colophon-secondary { font-size: 12px; color: #5f5f5f; }
+  .colophon-secondary h2 { font-size: 13px; color: #4a4a4a; }
+  .colophon-src { font-size: 12px; color: #7a7a7a; }
+
+  .provenance { margin-top: 20px; padding-top: 12px; border-top: 1px dotted #cfc7b6; font-size: 12px; line-height: 1.75; color: #5a5a5a; }
+  .provenance b { display: block; font-size: 12px; color: #3a3a3a; font-weight: 600; margin-bottom: 2px; }
+  .provenance .prov-note { font-size: 11px; color: #7a7a7a; margin-top: 3px; }
+  @media print { .provenance { display: block; color: #444; border-top: 1px solid #ccc; } }
+
   /* ---- 使い方 ---- */
   .howto {
     background: var(--card);
@@ -630,7 +654,7 @@
     .sheet { max-width: none; width: 100%; }
 
     /* 操作用の要素は紙に出さない */
-    .howto, .dropzone, .try-row, .privacy-note, .export-row,
+    .howto, .dropzone, .try-row, .privacy-note, .export-row, .colophon,
     .period-controls, .fx-row, #overlay, .skip-note, details.detail-toggle summary {
       display: none !important;
     }
@@ -815,7 +839,48 @@
         </div>
       </div>
     </div>
+    <div class="provenance" id="provenance"></div>
   </div>
+
+  <footer class="colophon">
+    <section class="colophon-primary">
+      <h2>経費として保存する用途を準備しています</h2>
+      <p>受取帳が出すのは集計までです。これを<b>経費として保存する</b>には、ほかに次が要ります。</p>
+      <ul>
+        <li>取引年月日・取引先・取引金額で引ける索引</li>
+        <li>1取引につき1ファイルの証憑</li>
+        <li>改ざん防止の事務処理規程（売上規模に関係なく必要）</li>
+      </ul>
+      <p>
+        <b>これを書き出すものは、動くところまでできています。</b>
+        ただし<b>勘定科目の当て方が実務で通用するか</b>は、まだ確かめられていません。だから公開していません。
+      </p>
+      <p>出すかどうかを決めるために、知りたいことが2つあります。</p>
+      <ul>
+        <li><b>毎年その作業にどれくらい時間がかかっているか</b></li>
+        <li><b>主にどこからの請求を扱っているか</b> — 勘定科目の対応表にそのまま使います</li>
+      </ul>
+      <p>
+        回答は作るものを決めるためだけに使います。
+        <b>公開したらお知らせします。</b>フォームの連絡先欄に記入してもらえれば、最初に届きます。
+      </p>
+      <p><a href="https://forms.gle/TX84t3URydSbuN5q9" target="_blank" rel="noopener noreferrer">作業を教える・公開時の連絡を受け取る（Google フォーム）</a></p>
+    </section>
+
+    <section class="colophon-secondary">
+      <h2>この解析がどこで壊れるか</h2>
+      <p>
+        レシートメールの解析は、実データを流すと静かに壊れます。文字コード、実体参照、代理決済、
+        日付のタイムゾーン。どれも例外を投げず、それらしい別の値として出てきます。
+        壊れ方を再現する入力の作り方と、食い違いを見つける装置の作り方を本にまとめました。
+      </p>
+      <p><a href="https://zenn.dev/poko8725/books/receipt-mail-parsing" target="_blank" rel="noopener noreferrer">壊して確かめる .eml 解析（Zenn・500円）</a></p>
+    </section>
+
+    <p class="colophon-src">
+      <a href="https://github.com/poko8725/receipt-ledger" target="_blank" rel="noopener noreferrer">ソースコード（GitHub）</a>
+    </p>
+  </footer>
 </div>
 
 <script>
@@ -1577,8 +1642,44 @@ async function handleFiles(fileList) {
   renderResults(skipped);
 }
 
+// この集計が「どの規則で」出たものかを、値と一緒に残す。
+// 日付の解釈は一つに決まらないので、値だけでは後から検算できない。
+const APP_VERSION = "0.1.0";
+
+function localTimeZone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "不明"; }
+  catch (e) { return "不明"; }
+}
+
+function nowStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function provenanceText() {
+  return `受取帳 v${APP_VERSION} ／ 日付は閲覧環境の暦（${localTimeZone()}）で決めています ／ ${nowStamp()} 作成`;
+}
+
+function renderProvenance() {
+  const el = document.getElementById("provenance");
+  if (!el) return;
+  el.innerHTML = "";
+  const line = document.createElement("div");
+  line.innerHTML = "<b>この集計の出どころ</b>";
+  const meta = document.createElement("div");
+  meta.textContent = provenanceText();
+  const note = document.createElement("div");
+  note.className = "prov-note";
+  note.textContent =
+    "同じ .eml でも、暦の設定が違う環境で読み込むと日付が変わることがあります。"
+    + "月や年をまたぐと集計も変わるので、値を持ち出すときはこの行も一緒に控えてください。";
+  el.append(line, meta, note);
+}
+
 function renderResults(skipped) {
   lastSkipped = skipped || 0;
+  renderProvenance();
   const resultsEl = document.getElementById("results");
   if (allRecords.length === 0) {
     resultsEl.style.display = "block";
@@ -2035,8 +2136,9 @@ window.addEventListener("beforeprint", () => {
   const shown = visibleRecords();
   const range = dateRange(shown);
   document.getElementById("printMeta").textContent =
-    range ? `対象期間 ${range.from} 〜 ${range.to} ／ ${shown.length} 件`
-          : `${shown.length} 件`;
+    (range ? `対象期間 ${range.from} 〜 ${range.to} ／ ${shown.length} 件`
+           : `${shown.length} 件`) + `\n${provenanceText()}`;
+  document.getElementById("printMeta").style.whiteSpace = "pre-line";
   detailWasOpen = detailEl.open;
   detailEl.open = true;
 });
