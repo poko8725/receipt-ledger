@@ -64,6 +64,15 @@ jobs:
   compare:
     runs-on: ubuntu-latest
 
+    # ランナーの時計は UTC。そのままだと「日付を UTC に寄せる」欠陥を
+    # 注入しても出力が変わらず、prove.py が見逃しとして落ちる。
+    # 正しい実装と壊れた実装が同じ値を返すので、これは装置の穴ではなく
+    # 「UTC の機械では、UTC に寄せる誤りを観測できない」という原理。
+    # Python 側も Chrome 側も同じ環境変数を見るので、ここで揃える。
+    # cli/tests が TZ を Asia/Tokyo に固定しているのと同じ理由。
+    env:
+      TZ: Asia/Tokyo
+
     steps:
       - uses: actions/checkout@v4
 
