@@ -16,6 +16,7 @@ from .console import enable_utf8_output
 from .report import print_summary, write_detail_csv, write_summary_csv
 from .rules import canonicalize_merchants
 from .sources import SOURCES, AppleMailSource, EmlDirSource, ImapSource, SourceUnavailable
+from .sources.apple_mail import FDA_HINT
 
 
 def ymd(value: str) -> str:
@@ -184,6 +185,12 @@ def main(argv: list[str] | None = None) -> int:
         print("\n金額を抽出できたメールがありませんでした。", file=sys.stderr)
         if scanned == 0:
             print("メールが1通も見つかっていません。ソースの指定を確認してください。", file=sys.stderr)
+            if isinstance(source, AppleMailSource):
+                # 権限が無くても走査は例外を投げず、0 通として終わる。
+                # ここで案内しないと「今年は領収書が無かった」と読み違える。
+                print("\nフルディスクアクセスが無いと、エラーではなく 0 通として出ます。",
+                      file=sys.stderr)
+                print(FDA_HINT, file=sys.stderr)
         elif filtered:
             # 期間で落ちたぶんが多いのに解析ルールを疑わせると、
             # 利用者は関係のない場所を探すことになる。原因の候補を正しい順に出す。
