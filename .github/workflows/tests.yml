@@ -1,0 +1,59 @@
+name: tests
+
+# 解析まわりの回帰を機械で捕まえる。
+#
+# 置いた理由は実績があるからで、予防ではない。Date ヘッダのタイムゾーンを
+# 取り違えたまま集計を出し、公開済みの記事に載せた表の結論（ピークの年）が
+# あとから変わった。この種の欠陥は例外を投げず、合計が静かにずれるだけなので、
+# 突き合わせる装置が無いと気づけない。
+#
+# ここで走らせるのは cli/tests のみ。ブラウザ版と CLI 版の照合（compare/）は
+# Chrome とフィクスチャの生成が要るので、まだ入れていない。
+
+on:
+  push:
+  pull_request:
+
+# 読むだけで足りる。public リポジトリなので、既定に任せず明示しておく。
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 下限は check_environment.py が要求する 3.10、上限は現行。
+        # 間を埋めていないのは、標準ライブラリしか使っていないため。
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 依存パッケージのインストールは無い。標準ライブラリのみで走る。
+      # テスト側が TZ を Asia/Tokyo に固定して後片付けまでするので、
+      # ランナーのタイムゾーンには依存しない。
+      - name: テスト
+        working-directory: cli
+        run: |
+          set -o pipefail
+          python -m unittest discover tests -v 2>&1 | tee "${RUNNER_TEMP}/result.txt"
+
+      # discover がテストを1件も拾えなくても unittest は成功で終わる。
+      # そのとき「検査して通った緑」と「何も検査していない緑」は出力で区別が付かない。
+      # 現在の21件を下限として置き、下回ったら落とす。
+      # テストを増やす方向では触らなくてよい（増える側にしか動かないため）。
+      - name: テストが実際に走ったことを確かめる
+        run: |
+          count=$(grep -c '\.\.\. ok$' "${RUNNER_TEMP}/result.txt" || true)
+          echo "通ったテスト: ${count} 件"
+          if [ "${count}" -lt 21 ]; then
+            echo "::error::通ったテストが 21 件を下回った。テストが消えたか、まとめて skip された可能性がある"
+            exit 1
+          fi
