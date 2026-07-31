@@ -6,6 +6,7 @@ import csv
 import sys
 import unicodedata
 from collections import defaultdict
+from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
@@ -29,6 +30,35 @@ def csv_safe(value):
     if isinstance(value, str) and value.startswith(_FORMULA_LEAD):
         return "'" + value
     return value
+
+
+class _SafeWriter:
+    """全セルを csv_safe に通してから書く。
+
+    呼び出し側で1セルずつ csv_safe を書く形にしていたところ、
+    write_detail_csv で掛け忘れていて件名がそのまま出ていた。件名は
+    第三者が自由に決められるので、そこが一番危ない列だった。
+
+    ブラウザ版(index.html の toCsv)は全セルを通す関所になっていて
+    漏れていない。同じ形にして、書き出しが増えても掛け忘れが
+    起きないようにする。
+    """
+
+    def __init__(self, f) -> None:
+        self._w = csv.writer(f)
+
+    def writerow(self, row: Iterable) -> None:
+        self._w.writerow([csv_safe(v) for v in row])
+
+
+@contextmanager
+def _open_csv(path: Path):
+    """CSV を書き出す唯一の入口。
+
+    Excel が UTF-8 と認識できるよう BOM 付きにする。
+    """
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        yield _SafeWriter(f)
 
 
 def totals_by_merchant(
@@ -75,21 +105,18 @@ def grand_totals(records: Iterable[Record]) -> dict[str, Decimal]:
 
 def write_summary_csv(path: Path, records: list[Record]) -> None:
     totals, counts = totals_by_merchant(records)
-    # Excel が UTF-8 と認識できるよう BOM 付きにする
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.writer(f)
-        w.writerow([csv_safe(v) for v in ["カテゴリ", "請求元", "通貨", "合計金額", "件数", "平均単価"]])
+    with _open_csv(path) as w:
+        w.writerow(["カテゴリ", "請求元", "通貨", "合計金額", "件数", "平均単価"])
         for (merchant, currency) in sorted(totals, key=lambda k: (k[1], -totals[k])):
             total, count = totals[(merchant, currency)], counts[(merchant, currency)]
-            w.writerow([csv_safe(v) for v in [category_of(merchant), merchant, currency, total, count,
-                        (total / count).quantize(total)]])
+            w.writerow([category_of(merchant), merchant, currency, total, count,
+                        (total / count).quantize(total)])
 
 
 def write_detail_csv(path: Path, records: list[Record]) -> None:
     header = ["日付", "カテゴリ", "請求元", "品目", "通貨", "金額", "送信元", "件名", "メールボックス", "出所"]
     fields = ["date", "merchant", "item", "currency", "amount", "sender", "subject", "mailbox", "origin"]
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.writer(f)
+    with _open_csv(path) as w:
         w.writerow(header)
         for r in sorted(records, key=lambda x: x.date):
             row = [getattr(r, k) for k in fields]
