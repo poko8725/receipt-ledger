@@ -7,8 +7,7 @@ name: tests
 # あとから変わった。この種の欠陥は例外を投げず、合計が静かにずれるだけなので、
 # 突き合わせる装置が無いと気づけない。
 #
-# ここで走らせるのは cli/tests のみ。ブラウザ版と CLI 版の照合（compare/）は
-# Chrome とフィクスチャの生成が要るので、まだ入れていない。
+# 2つ回す。cli/tests（Python 単体）と、compare/（ブラウザ版と CLI 版の突き合わせ）。
 
 on:
   push:
@@ -57,3 +56,38 @@ jobs:
             echo "::error::通ったテストが 21 件を下回った。テストが消えたか、まとめて skip された可能性がある"
             exit 1
           fi
+
+  # 同じ解析ロジックを2つ持っている（index.html の JS と cli/ の Python）ので、
+  # 同じメールを両方に流して1件ずつ突き合わせる。
+  # 目視レビューでは差が見つからない領域で、欠陥は例外ではなく
+  # 「もっともらしい別の値」として出るため。
+  compare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # ubuntu-latest には Google Chrome が入っている。
+      # 消えたときに、照合を回さないまま緑にならないよう先に確かめる。
+      - name: Chrome があることを確かめる
+        run: google-chrome --version
+
+      # .eml はリポジトリに入っていない。実データの混入を防ぐため
+      # .gitignore で *.eml を丸ごと弾いていて、フィクスチャも例外にしていないため。
+      # 毎回生成するので、生成器を更新したのに古いフィクスチャで
+      # 照合していた、という取りこぼしがそもそも起きない。
+      - name: フィクスチャを生成する
+        run: python compare/make_fixtures.py
+
+      - name: ブラウザ版と CLI 版を突き合わせる
+        run: python compare/compare.py
+
+      # 「差分0件」は、一致したとも、何も検査していないとも読める。
+      # 過去に実際にあった欠陥をブラウザ側に戻し、どれが差分に転ぶかを見る。
+      # 1つも転ばない欠陥があれば、それは今の入力では検知できない穴なので落ちる。
+      - name: 装置が生きていることを確かめる
+        run: python compare/prove.py
