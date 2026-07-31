@@ -16,7 +16,13 @@ sys.path.insert(0, str(ROOT / "cli"))
 
 from receipt_ledger.analyze import analyze  # noqa: E402
 from receipt_ledger.console import enable_utf8_output  # noqa: E402
+from receipt_ledger.report import csv_safe  # noqa: E402
 from receipt_ledger.sources.base import RawMessage  # noqa: E402
+
+
+def _js_number(value: float) -> str:
+    """JS の String(number) に合わせる。1220.0 ではなく "1220"。"""
+    return str(int(value)) if float(value).is_integer() else repr(value)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -42,7 +48,7 @@ def run() -> dict[str, dict | None]:
             # 片方だけが捨てた場合こそ差分なので、null として残す。
             results[path.name] = None
             continue
-        results[path.name] = {
+        row = {
             "subject": record.subject,
             "sender": record.sender,
             "merchant": record.merchant,
@@ -51,6 +57,16 @@ def run() -> dict[str, dict | None]:
             "currency": record.currency,
             "date": record.date,
         }
+        # CSV に書く直前の形。解析結果が同じでも、ここで割れれば
+        # 片方の出力だけ数式として実行される。
+        # JS 側は数値を String() で文字列にしてから通すので、揃える。
+        row["csv_cells"] = [
+            csv_safe(v) for v in [
+                row["date"], row["merchant"], row["item"], row["currency"],
+                _js_number(row["amount"]), row["sender"], row["subject"],
+            ]
+        ]
+        results[path.name] = row
     return results
 
 

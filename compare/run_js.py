@@ -41,6 +41,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 BEGIN = "=== 照合対象ここから ==="
 END = "=== 照合対象ここまで ==="
 
+# 出力層(csvSafe)は解析側から離れた位置にあるので、印を分けて切り出す。
+# ここを含めるまで、CSV に出る直前の処理は照合対象の外にあった。
+OUT_BEGIN = "=== 出力の照合対象ここから ==="
+OUT_END = "=== 出力の照合対象ここまで ==="
+
 # Windows では PATH に入っていないので、実体のパスを直接見る。
 CHROME_CANDIDATES = [
     # macOS
@@ -70,18 +75,26 @@ def find_chrome() -> str:
     )
 
 
-def extract_core() -> str:
-    """index.html から照合対象の JS を切り出す。"""
-    source = (ROOT / "index.html").read_bytes().decode("utf-8", errors="strict")
-    start = source.find(BEGIN)
-    end = source.find(END)
-    if start == -1 or end == -1:
-        sys.exit(f"index.html に印が見つかりません（{BEGIN} / {END}）")
-    if end < start:
-        sys.exit("印の順序が逆になっています")
+def _slice(source: str, begin: str, end: str) -> str:
+    start = source.find(begin)
+    stop = source.find(end)
+    if start == -1 or stop == -1:
+        sys.exit(f"index.html に印が見つかりません（{begin} / {end}）")
+    if stop < start:
+        sys.exit(f"印の順序が逆になっています（{begin}）")
     # 印の行そのものは含めない
     start = source.index("\n", start) + 1
-    return source[start:end].rsplit("\n", 1)[0]
+    return source[start:stop].rsplit("\n", 1)[0]
+
+
+def extract_core() -> str:
+    """index.html から照合対象の JS を切り出す。
+
+    解析側と出力側の2箇所。出力側(csvSafe)は解析側から 300 行ほど離れた
+    位置にあり、印を1つにすると間の UI コードまで巻き込むので分けてある。
+    """
+    source = (ROOT / "index.html").read_bytes().decode("utf-8", errors="strict")
+    return _slice(source, BEGIN, END) + "\n" + _slice(source, OUT_BEGIN, OUT_END)
 
 
 def build_page(core: str) -> str:
@@ -105,11 +118,16 @@ for (const [name, b64] of Object.entries(CASES)) {
     const found = extractAmount(subject) ?? extractAmount(body);
     if (found === null) { out[name] = null; continue; }
     const { merchant, item } = resolveMerchant(from, subject, body);
-    out[name] = {
+    const row = {
       subject, sender: from, merchant, item,
       amount: found.amount, currency: found.currency,
       date: dateOnlyFromHeader(date) ?? "不明",
     };
+    // CSV に書く直前の形。解析結果が同じでも、ここで割れれば
+    // 片方の出力だけ数式として実行される。
+    row.csv_cells = [row.date, row.merchant, row.item, row.currency,
+                     String(row.amount), row.sender, row.subject].map(csvSafe);
+    out[name] = row;
   } catch (e) {
     out[name] = { error: String(e) };
   }

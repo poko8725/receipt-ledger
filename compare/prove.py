@@ -62,6 +62,12 @@ DEFECTS = [
         "",
     ),
     (
+        "数式をエスケープしない",
+        "CSV に出る直前の値をそのまま通す(開いただけで数式が走る)",
+        '  return /^[=+\\-@\\t\\r]/.test(s) ? "\'" + s : s;',
+        "  return s;",
+    ),
+    (
         "代理決済の本文を読まない",
         "送信元だけで請求元を判定する",
         "  const receipt = parseReceipt(sender, subject, body);",

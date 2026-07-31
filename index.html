@@ -1837,10 +1837,16 @@ function escapeHtml(str) {
 // 請求元名も品目もメール由来＝第三者が送り込める値なので、そのまま書くと
 // 「CSV を開いただけで数式が走る」状態になる。Excel で開く前提の道具なので直撃する。
 // 先頭に ' を付けると Excel は「以降は文字列」と解釈し、表示もしない。
+// === 出力の照合対象ここから ===
+// 上の「照合対象」が解析側なのに対して、ここは出力の直前。
+// Python 側(receipt_ledger.report.csv_safe)と同じ判定でなければならない。
+// 印を分けているのは、解析側と離れた位置にあるこの関数だけを
+// compare/ のハーネスに渡すため。
 function csvSafe(value) {
   const s = String(value ?? "");
   return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
 }
+// === 出力の照合対象ここまで ===
 
 function toCsv(rows) {
   return rows.map(row => row.map(cell => {

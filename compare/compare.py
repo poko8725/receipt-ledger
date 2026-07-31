@@ -26,7 +26,10 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent / "cli"))
 from receipt_ledger.console import enable_utf8_output  # noqa: E402
-FIELDS = ["subject", "sender", "merchant", "item", "amount", "currency", "date"]
+FIELDS = ["subject", "sender", "merchant", "item", "amount", "currency", "date",
+          # CSV に書く直前のセル。解析結果が一致していても、ここで割れると
+          # 片方の出力だけ表計算ソフトで数式として実行される。
+          "csv_cells"]
 
 
 def _utf8_env() -> dict:
