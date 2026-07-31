@@ -182,7 +182,11 @@ def main() -> None:
 
     chrome = find_chrome()
 
-    with tempfile.TemporaryDirectory() as tmp:
+    # ignore_cleanup_errors: --dump-dom が返ったあとも Chrome の子プロセスが
+    # プロファイルに書き続けることがあり、後片付けが「Directory not empty」で
+    # 落ちる。DOM は取れているのに結果が捨てられるので、片付けの失敗は無視する。
+    # macOS では再現せず Linux で出た（GitHub Actions の ubuntu-latest）。
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         html = Path(tmp) / "harness.html"
         html.write_text(page, encoding="utf-8")
         # 起動中の Chrome と衝突しないよう、使い捨てのプロファイルで動かす。

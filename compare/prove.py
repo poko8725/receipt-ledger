@@ -112,7 +112,8 @@ def run_browser(core: str) -> dict:
     import tempfile
 
     chrome = run_js.find_chrome()
-    with tempfile.TemporaryDirectory() as tmp:
+    # ignore_cleanup_errors の理由は run_js.py と同じ。
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         html = Path(tmp) / "harness.html"
         html.write_text(page, encoding="utf-8")
         dumped = run_js.read_dom([
