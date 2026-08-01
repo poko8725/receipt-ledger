@@ -1108,11 +1108,106 @@ const _LABEL = String.raw`(?:合計金額|合計|ご請求金額|ご利用金額
 
 // ラベル付きを最優先。読み飛ばしは最短一致にしないと
 // "Total: USD 49.99" の USD を食い潰して通貨が円に化ける。
+// g を付けているのは、文脈で弾いた一致の次を探し続けるため(extractAmount)。
 const AMOUNT_PATTERNS = [
-  new RegExp(`${_LABEL}[^\\d¥￥$€£]{0,12}?(${_PRE})?\\s*(${_NUM})\\s*(${_SUF})?`, "i"),
-  new RegExp(`(${_PRE})\\s*(${_NUM})()`, "i"),
-  new RegExp(`()(${_NUM})\\s*(${_SUF})`, "i"),
+  new RegExp(`${_LABEL}[^\\d¥￥$€£]{0,12}?(${_PRE})?\\s*(${_NUM})\\s*(${_SUF})?`, "gi"),
+  new RegExp(`(${_PRE})\\s*(${_NUM})()`, "gi"),
+  new RegExp(`()(${_NUM})\\s*(${_SUF})`, "gi"),
 ];
+
+// 金額の形はしているが、支払った額ではない文脈。
+//
+// 実測で拾ってしまった4件が、それぞれ別の形をしていた。
+//
+//   「Amazonギフトカード（※）3,000円相当」   → 当選賞品の価値
+//   「3,980円(税込)以上ご購入で送料無料」     → 送料無料のしきい値
+//   「新料金：¥2,500 — 旧料金：¥1,980」       → 値上げの予告。まだ払っていない
+//   「合計で星玉×2,550や星軌専用チケット×10」 → ゲーム内通貨の個数
+//
+// どれも例外を出さず「もっともらしい金額」として通るので、**合計が静かに膨らむ**。
+// 7月後半の実データでは、誤検出だけで ¥12,030 あった。
+//
+// 数字の直前・直後だけを見る。離れた語まで見に行くと、本物のレシートの脚注
+// (「1,000円以上のご購入で送料無料」など)に引っかかって本物のほうを落とす。
+const _NOT_PAID_BEFORE =
+  /(?:×|✕|新料金|旧料金|現行料金|改定後|改定前|値上げ後|値下げ後)[\s:：=＝¥￥$€£]*$/;
+const _NOT_PAID_AFTER =
+  // 括弧書き(「(税込)」など)を1つだけ挟むのは許して、その先で判定する。
+  /^\s*(?:\([^()（）]{0,8}\)|（[^()（）]{0,8}）)?\s*(?:相当|以上|以下|未満|ポイント|ﾎﾟｲﾝﾄ|OFF|オフ|割引|引き|還元|お得|分の)/i;
+
+// 1つの取引の進み具合を知らせる件名。**これが無ければ寄せない。**
+//
+// (請求元・金額・日付) だけで寄せると潰しすぎる。同じ日に同じ額を何度も払うのは
+// 実データでは普通に起きていて、7月16日には同じ相手から ¥610 の領収書が3通来ていた。
+// 課金の単位が決まっている相手ほどこうなるので、この道具の主な用途で一番よく踏む。
+//
+// 当たらなければ寄せずに残す。勝手に推測して合計を減らすより、そのほうが直しやすい。
+const _PROGRESS_SUBJECT =
+  /注文|ご注文|発送|出荷|お届け|配送|到着|order\s*(?:confirm|placed|received)|your\s+order|shipp|dispatch|on\s+its\s+way|out\s+for\s+delivery|delivered/i;
+
+// 2件が「1つの取引の別々の通知」として読めるか。金額と日付は判定済みの前提。
+//
+// 件名が同じで届くのは、1件ごとに1通出す定型の相手(「…様への支払いの領収書」)。
+// 同じ文面が並んでいるなら、同じ取引の別の段階ではなく別々の取引である。
+// そのうえで、どちらかが段階を名乗っているときだけ寄せる。
+function isSameTransaction(a, b) {
+  if (a.subject === b.subject) return false;
+  return _PROGRESS_SUBJECT.test(a.subject) || _PROGRESS_SUBJECT.test(b.subject);
+}
+
+// 同じ取引が複数の通知で届いたぶんを寄せる。{kept, dropped} を返す。
+//
+// 「ご注文確認」と「発送済み」のように、1回の買い物が別々のメールで届く。
+// 送る側は進捗を知らせているだけなので通知は重複しておらず、Message-ID も本文も違う。
+// 寄せる鍵は通知の側ではなく、その裏にある取引の側にしかない。
+//
+// **それでも潰しうる**(同じ日に別の商品を同じ額で2回注文した場合)ので、
+// 消さずに返して、呼び出し側に必ず見せさせる。
+// 寄せる先は先に来たほう。注文が先で発送が後なので、注文日のほうが実態に近い。
+function collapseDuplicates(records, windowDays = 3, key = r => r.merchant) {
+  const kept = [];
+  const dropped = [];
+  const ordered = records.slice().sort((a, b) => {
+    const au = a.date === "不明", bu = b.date === "不明";
+    if (au !== bu) return au ? 1 : -1;
+    return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+  });
+  for (const record of ordered) {
+    let match = null;
+    if (record.date !== "不明") {
+      for (const candidate of kept) {
+        if (candidate.date === "不明") continue;
+        if (key(candidate) !== key(record)) continue;
+        if (candidate.currency !== record.currency) continue;
+        if (candidate.amount !== record.amount) continue;
+        if (daysBetween(candidate.date, record.date) > windowDays) continue;
+        if (isSameTransaction(candidate, record)) { match = candidate; break; }
+      }
+    }
+    if (match) dropped.push({ record, kept: match });
+    else kept.push(record);
+  }
+  return { kept, dropped };
+}
+
+// "YYYY-MM-DD" 同士の日数差。読めない値は寄せない側に倒す。
+function daysBetween(a, b) {
+  const x = Date.parse(a + "T00:00:00Z"), y = Date.parse(b + "T00:00:00Z");
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return Infinity;
+  return Math.abs(y - x) / 86400000;
+}
+
+// その一致が「実際に払った額」として読めるか。
+//
+// 数字の位置は m.index からの相対で求める。d フラグ(hasIndices)は使わない。
+// 古い Safari で SyntaxError になり、**ページ全体が動かなくなる**ため。
+// どのパターンも数字より前に数字を含まないので、最初の数字の位置でよい。
+function isPaidAmount(text, m) {
+  const numStart = m.index + m[0].search(/\d/);
+  const before = text.slice(Math.max(0, numStart - 12), numStart);
+  const after = text.slice(m.index + m[0].length, m.index + m[0].length + 24);
+  return !(_NOT_PAID_BEFORE.test(before) || _NOT_PAID_AFTER.test(after));
+}
 
 function currencyOf(pre, suf) {
   for (const token of [pre, suf]) {
@@ -1488,14 +1583,21 @@ function resolveMerchant(sender, subject, body) {
 
 // { amount, currency } を返す。取れなければ null。
 // 通貨をここで確定させ、下流では絶対に通貨をまたいで足さない。
+// 一致するたびに文脈を見て、支払額として読めないものは飛ばす。
+// 最初の一致で打ち切ると、脚注に「1,000円以上で送料無料」と書いてある
+// 本物のレシートを、そのしきい値の金額で計上することになる。
 function extractAmount(text) {
   if (!text) return null;
   for (const pattern of AMOUNT_PATTERNS) {
-    const m = pattern.exec(text);
-    if (!m) continue;
-    const value = parseFloat(m[2].replace(/,/g, ""));
-    if (!Number.isFinite(value)) continue;
-    return { amount: value, currency: currencyOf(m[1], m[3]) };
+    pattern.lastIndex = 0;  // g 付きは前回の位置を持ち越すので、必ず戻す
+    let m;
+    while ((m = pattern.exec(text)) !== null) {
+      if (m[0] === "") { pattern.lastIndex++; continue; }  // 無限ループ避け
+      if (!isPaidAmount(text, m)) continue;
+      const value = parseFloat(m[2].replace(/,/g, ""));
+      if (!Number.isFinite(value)) continue;
+      return { amount: value, currency: currencyOf(m[1], m[3]) };
+    }
   }
   return null;
 }

@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "cli"))
 from receipt_ledger.analyze import analyze  # noqa: E402
 from receipt_ledger.console import enable_utf8_output  # noqa: E402
 from receipt_ledger.report import csv_safe  # noqa: E402
+from receipt_ledger.rules import collapse_duplicates  # noqa: E402
 from receipt_ledger.sources.base import RawMessage  # noqa: E402
 
 
@@ -66,7 +67,21 @@ def run() -> dict[str, dict | None]:
                 _js_number(row["amount"]), row["sender"], row["subject"],
             ]
         ]
+        row["_record"] = record
         results[path.name] = row
+
+    # 寄せ処理は1通ずつでは判定できない。全件を渡した結果を、
+    # 「どれに寄せられたか」として1件ずつの行に書き戻す。
+    # こうすると既存の突き合わせ機構がそのまま使えて、装置の守備範囲が広がる。
+    rows = {name: row for name, row in results.items() if row}
+    by_record = {id(row["_record"]): name for name, row in rows.items()}
+    _, dropped = collapse_duplicates([row["_record"] for row in rows.values()])
+    for row in rows.values():
+        row["duplicate_of"] = ""
+    for record, kept in dropped:
+        rows[by_record[id(record)]]["duplicate_of"] = by_record[id(kept)]
+    for row in rows.values():
+        del row["_record"]
     return results
 
 

@@ -132,6 +132,16 @@ for (const [name, b64] of Object.entries(CASES)) {
     out[name] = { error: String(e) };
   }
 }
+// 寄せ処理は1通ずつでは判定できない。全件を渡した結果を
+// 「どれに寄せられたか」として1件ずつの行に書き戻す。
+// こうすると既存の突き合わせ機構がそのまま使えて、装置の守備範囲が広がる。
+{
+  const names = Object.keys(out).filter(n => out[n] && !out[n].error);
+  for (const n of names) out[n].duplicate_of = "";
+  const records = names.map(n => Object.assign({ _name: n }, out[n]));
+  const { dropped } = collapseDuplicates(records);
+  for (const d of dropped) out[d.record._name].duplicate_of = d.kept._name;
+}
 // DOM に日本語をそのまま置くと dump-dom で実体参照に化けるので base64 で運ぶ
 const json = JSON.stringify(out);
 const bytes = new TextEncoder().encode(json);

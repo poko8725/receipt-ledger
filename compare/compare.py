@@ -29,7 +29,11 @@ from receipt_ledger.console import enable_utf8_output  # noqa: E402
 FIELDS = ["subject", "sender", "merchant", "item", "amount", "currency", "date",
           # CSV に書く直前のセル。解析結果が一致していても、ここで割れると
           # 片方の出力だけ表計算ソフトで数式として実行される。
-          "csv_cells"]
+          "csv_cells",
+          # どの通知に寄せられたか。1通ずつでは判定できない処理なので、
+          # 両側で全件を流した結果を1件ずつの行に書き戻して比べる。
+          # ここを見ないと、片方だけが取引を寄せて合計が静かにずれる。
+          "duplicate_of"]
 
 
 def _utf8_env() -> dict:

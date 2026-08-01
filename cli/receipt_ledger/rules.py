@@ -10,6 +10,7 @@ HTML 1枚を維持しているため、現状は手で同期させる必要が�
 from __future__ import annotations
 
 import re
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 # キー: 表示名 / 値: 送信元アドレスや件名に含まれるキーワード
@@ -69,6 +70,131 @@ AMOUNT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(rf"(?P<pre>{_PRE})\s*(?P<num>{_NUM})", re.IGNORECASE),
     re.compile(rf"(?P<num>{_NUM})\s*(?P<suf>{_SUF})", re.IGNORECASE),
 ]
+
+
+# 金額の形はしているが、支払った額ではない文脈。
+#
+# 実測で拾ってしまった4件が、それぞれ別の形をしていた。
+#
+#   「Amazonギフトカード（※）3,000円相当」   → 当選賞品の価値
+#   「3,980円(税込)以上ご購入で送料無料」     → 送料無料のしきい値
+#   「新料金：¥2,500 — 旧料金：¥1,980」       → 値上げの予告。まだ払っていない
+#   「合計で星玉×2,550や星軌専用チケット×10」 → ゲーム内通貨の個数
+#
+# どれも例外を出さず「もっともらしい金額」として通るので、**合計が静かに膨らむ**。
+# 7月後半の実データでは、誤検出だけで ¥12,030 あった。
+#
+# 数字の直前・直後だけを見る。離れた語まで見に行くと、本物のレシートの脚注
+# (「1,000円以上のご購入で送料無料」など)に引っかかって本物のほうを落とす。
+_NOT_PAID_BEFORE = re.compile(
+    r"(?:×|✕|新料金|旧料金|現行料金|改定後|改定前|値上げ後|値下げ後)"
+    r"[\s:：=＝¥￥$€£]*$"
+)
+_NOT_PAID_AFTER = re.compile(
+    # 括弧書き(「(税込)」など)を1つだけ挟むのは許して、その先で判定する。
+    r"^\s*(?:\([^()（）]{0,8}\)|（[^()（）]{0,8}）)?\s*"
+    r"(?:相当|以上|以下|未満|ポイント|ﾎﾟｲﾝﾄ|OFF|オフ|割引|引き|還元|お得|分の)",
+    re.IGNORECASE,
+)
+
+
+def is_paid_amount(text: str, match: re.Match[str]) -> bool:
+    """その一致が「実際に払った額」として読めるか。"""
+    before = text[max(0, match.start("num") - 12) : match.start("num")]
+    after = text[match.end() : match.end() + 24]
+    return not (_NOT_PAID_BEFORE.search(before) or _NOT_PAID_AFTER.match(after))
+
+
+# 1つの取引の進み具合を知らせる件名。**これが無ければ寄せない。**
+#
+# (請求元・金額・日付) だけで寄せると潰しすぎる。同じ日に同じ額を何度も払うのは
+# 実データでは普通に起きていて、7月16日には同じ相手から ¥610 の領収書が3通来ていた。
+# 課金の単位が決まっている相手ほどこうなるので、**この道具の主な用途で一番よく踏む**。
+#
+# 当たらなければ寄せずに残す。勝手に推測して合計を減らすより、そのほうが直しやすい。
+_PROGRESS_SUBJECT = re.compile(
+    r"注文|ご注文|発送|出荷|お届け|配送|到着|"
+    r"order\s*(?:confirm|placed|received)|your\s+order|shipp|dispatch|"
+    r"on\s+its\s+way|out\s+for\s+delivery|delivered",
+    re.IGNORECASE,
+)
+
+
+def is_same_transaction(a, b) -> bool:
+    """2件が「1つの取引の別々の通知」として読めるか。金額と日付は判定済みの前提。
+
+    条件は2つ。
+
+    **件名が違うこと。**同じ件名で届くのは、1件ごとに1通出す定型の相手である
+    (「…様への支払いの領収書」)。同じ文面が並んでいるなら、それは同じ取引の
+    別の段階ではなく、別々の取引が同じ形で届いている。
+
+    **どちらかが進み具合を知らせていること。**「注文済み」と「発送済み」のように、
+    件名から段階が読めるときだけ寄せる。読めないものは寄せない。
+    """
+    if a.subject == b.subject:
+        return False
+    return bool(_PROGRESS_SUBJECT.search(a.subject) or _PROGRESS_SUBJECT.search(b.subject))
+
+
+def collapse_duplicates(records: list, window_days: int = 3,
+                        key=None) -> tuple[list, list[tuple]]:
+    """同じ取引が複数の通知で届いたぶんを寄せる。残す側と、寄せた側を返す。
+
+    「ご注文確認」と「発送済み」のように、1回の買い物が別々のメールで届く。
+    送る側は進捗を知らせているだけなので通知は重複しておらず、Message-ID も
+    本文も違う。**寄せる鍵は通知の側ではなく、その裏にある取引の側にしかない。**
+
+    (請求元, 通貨, 金額) が一致し、日付が `window_days` 以内で、かつ
+    `is_same_transaction` が通ったときだけ寄せる。金額と日付だけで寄せると、
+    同じ額を何度も払う買い方を潰す。
+
+    **それでも潰しうる。**同じ日に別の商品を同じ額で2回注文すれば、件名は違い、
+    どちらにも「注文」が入る。だから消さずに返して、呼び出し側に必ず見せさせる。
+    判定を強めるより、利用者が自分の買い方を知っている前提で外させるほうが安全側になる。
+
+    寄せる先は**先に来たほう**にする。注文が先で発送が後なので、
+    取引の日付としては注文日のほうが実態に近い。
+
+    `records` は Record のリスト。日付は "YYYY-MM-DD" か "不明"。
+    日付不明のものは寄せない(いつの取引か分からないものを同じとは言えない)。
+
+    `key` は請求元を取り出す関数。既定は `merchant` だが、経費用途では
+    作品名で上書きする前の `billed_by` を使う。**用途によって「同じ相手」の
+    定義が違うので、寄せる側で決めさせる。**
+    """
+    name_of = key or (lambda r: r.merchant)
+    kept: list = []
+    dropped: list[tuple] = []
+    # 先に来たほうへ寄せるので、日付順に見る。同日の並びは入力の順を保つ。
+    for record in sorted(records, key=lambda r: (r.date == "不明", r.date)):
+        match = None
+        if record.date != "不明":
+            for candidate in kept:
+                if candidate.date == "不明":
+                    continue
+                if (name_of(candidate), candidate.currency, candidate.amount) != (
+                    name_of(record), record.currency, record.amount
+                ):
+                    continue
+                if _days_between(candidate.date, record.date) > window_days:
+                    continue
+                if is_same_transaction(candidate, record):
+                    match = candidate
+                    break
+        if match is not None:
+            dropped.append((record, match))
+        else:
+            kept.append(record)
+    return kept, dropped
+
+
+def _days_between(a: str, b: str) -> int:
+    """"YYYY-MM-DD" 同士の日数差。読めない値は無限大扱いにして寄せない。"""
+    try:
+        return abs((date.fromisoformat(b) - date.fromisoformat(a)).days)
+    except ValueError:
+        return 10**9
 
 
 def _currency_of(pre: str | None, suf: str | None) -> str:
@@ -229,19 +355,23 @@ def extract_amount(text: str) -> tuple[Decimal, str] | None:
 
     通貨をここで確定させるのが要点。円とドルを混ぜて合計すると
     数字としては出るが意味が無いので、下流で必ず通貨ごとに分ける。
+
+    **一致するたびに文脈を見て、支払額として読めないものは飛ばす。**
+    最初の一致で打ち切ると、脚注に「1,000円以上で送料無料」と書いてある
+    本物のレシートを、そのしきい値の金額で計上することになる。
     """
     if not text:
         return None
     for pattern in AMOUNT_PATTERNS:
-        match = pattern.search(text)
-        if not match:
-            continue
-        raw = match.group("num").replace(",", "").strip()
-        try:
-            amount = Decimal(raw)
-        except InvalidOperation:
-            continue
-        return amount, _currency_of(match.groupdict().get("pre"), match.groupdict().get("suf"))
+        for match in pattern.finditer(text):
+            if not is_paid_amount(text, match):
+                continue
+            raw = match.group("num").replace(",", "").strip()
+            try:
+                amount = Decimal(raw)
+            except InvalidOperation:
+                continue
+            return amount, _currency_of(match.groupdict().get("pre"), match.groupdict().get("suf"))
     return None
 
 

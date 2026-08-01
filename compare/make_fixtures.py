@@ -342,6 +342,90 @@ def formula_subject() -> bytes:
     )
     return head + "合計 ¥630\n".encode("utf-8")
 
+def not_paid_context() -> bytes:
+    """金額の形をしているが払っていない数字が、本物より前に並んでいる領収書。
+
+    実データで誤検出した4つの形を1通に詰めてある。どれも「もっともらしい金額」
+    として通り、例外は出ない。**合計が静かに膨らむ**ので、
+    両実装が同じ順序で同じものを飛ばすことを確かめないと気づけない。
+
+      3,000円相当        当選賞品の価値
+      3,980円(税込)以上  送料無料のしきい値
+      新料金：¥2,500     値上げの予告。まだ払っていない
+      合計で星玉×2,550   ゲーム内通貨の個数
+
+    正解は最後の「合計 ¥1,220」。1つでも飛ばし損ねると、そこで打ち切って
+    別の数字を返すので、どちらの実装が緩いかが金額に出る。
+
+    脚注のしきい値より**後ろ**に本物を置いているのが要点で、最初の一致で
+    打ち切る実装だと本物に到達できない。
+    """
+    head = crlf(
+        "From: Example Store <billing@store.example>\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?" + base64.b64encode("ご購入ありがとうございます".encode()).decode() + "?=\n"
+        "Date: Wed, 15 Jul 2026 10:43:00 +0900\n"
+        "Message-ID: <fixture-12@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    body = (
+        "抽選でAmazonギフトカード（※）3,000円相当が当たる\n"
+        "※1　3,980円(税込)以上ご購入で送料無料となります。\n"
+        "新料金：¥2,500 — 旧料金：¥1,980\n"
+        "バージョンイベントに参加すると、合計で星玉×2,550を獲得できます\n"
+        "合計 ¥1,220\n"
+    )
+    return head + body.encode("utf-8")
+
+
+def _order_mail(ident: str, subject: str, day: int) -> bytes:
+    """同じ相手・同じ金額で、件名と日付だけ違うメール。"""
+    head = crlf(
+        "From: Example Mart <auto-confirm@mart.example>\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?" + base64.b64encode(subject.encode()).decode() + "?=\n"
+        f"Date: Wed, {day} Jul 2026 10:43:00 +0900\n"
+        f"Message-ID: <fixture-{ident}@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    return head + "合計 ¥2,520\n".encode("utf-8")
+
+
+def order_placed() -> bytes:
+    """1つの注文の前半。次の fixture と対で意味を持つ。
+
+    「注文済み」と「発送済み」は同じ買い物の別々の段階なので、
+    足すと実額の2倍になる。Message-ID も本文も違うので、
+    通知の同一性では寄せられない。
+    """
+    return _order_mail("13", "注文済み:「コンタクトレンズ」とその他1", 15)
+
+
+def order_shipped() -> bytes:
+    """1つの注文の後半。前の fixture と寄って1件になる。"""
+    return _order_mail("14", "発送済み:「コンタクトレンズ」とその他1", 16)
+
+
+def repeat_purchase_a() -> bytes:
+    """同じ額を同じ日に2回払った、別々の取引。**寄せてはいけないほう。**
+
+    件名が同じで届くのは、1件ごとに1通出す定型の相手である。
+    実データでは同じ日に同じ相手から ¥610 の領収書が3通来ていた。
+    課金の単位が決まっている相手ほどこの形になるので、
+    金額と日付だけで寄せる実装はここで必ず落ちる。
+    """
+    return _order_mail("15", "ご注文ありがとうございます", 20)
+
+
+def repeat_purchase_b() -> bytes:
+    """上と件名も金額も同じ、別の取引。寄せずに2件のまま残らなければならない。"""
+    return _order_mail("16", "ご注文ありがとうございます", 20)
+
+
 FIXTURES = {
     "01-iso2022jp-escape.eml": iso2022jp_escape,
     "02-html-entity-amount.eml": html_entity_amount,
@@ -354,6 +438,11 @@ FIXTURES = {
     "09-html-cell-boundary.eml": html_cell_boundary,
     "10-foreign-offset-boundary.eml": foreign_offset_boundary,
     "11-formula-subject.eml": formula_subject,
+    "12-not-paid-context.eml": not_paid_context,
+    "13-order-placed.eml": order_placed,
+    "14-order-shipped.eml": order_shipped,
+    "15-repeat-purchase-a.eml": repeat_purchase_a,
+    "16-repeat-purchase-b.eml": repeat_purchase_b,
 }
 
 

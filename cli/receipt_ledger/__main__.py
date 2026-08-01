@@ -14,9 +14,9 @@ from pathlib import Path
 from .analyze import Record, UnsupportedFormat, analyze
 from .console import enable_utf8_output
 from .report import print_summary, write_detail_csv, write_summary_csv
-from .rules import canonicalize_merchants
+from .rules import canonicalize_merchants, collapse_duplicates, format_money
 from .sources import SOURCES, AppleMailSource, EmlDirSource, ImapSource, SourceUnavailable
-from .sources.apple_mail import FDA_HINT
+from .sources.apple_mail import FDA_HINT, is_excluded
 
 
 def ymd(value: str) -> str:
@@ -39,7 +39,11 @@ def ymd(value: str) -> str:
 def build_source(args: argparse.Namespace):
     """--source の名前から実体を組み立てる。ソースを足すときはここに1分岐。"""
     if args.source == "apple-mail":
-        return AppleMailSource(mail_dir=Path(args.mail_dir) if args.mail_dir else None)
+        return AppleMailSource(
+            mail_dir=Path(args.mail_dir) if args.mail_dir else None,
+            include_excluded=args.all_mailboxes,
+            mailboxes=args.mailbox,
+        )
     if args.source == "imap":
         return ImapSource(folder=args.imap_folder, since=args.since)
     if args.source == "eml-dir":
@@ -47,6 +51,20 @@ def build_source(args: argparse.Namespace):
             sys.exit("エラー: --source eml-dir には --input-dir が必要です")
         return EmlDirSource(Path(args.input_dir))
     sys.exit(f"エラー: 未知のソース {args.source!r}")
+
+
+def print_mailboxes(counts: dict[str, int]) -> None:
+    """メールボックス一覧。**通数を必ず添える。**
+
+    0 通のものが一覧に混ざっているのが分かるようにする。Gmail のラベルは
+    Mail.app 上では他と同じに見えるのに、ローカルには実体が無いことがあり、
+    名前だけ並べると「指定できるはず」と読めてしまう。
+    """
+    for name in sorted(counts):
+        note = "  (既定では除外)" if is_excluded(name) else ""
+        if not counts[name]:
+            note += "  ← ローカルに実体なし"
+        print(f"{name}  {counts[name]} 通{note}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -65,12 +83,43 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="メールの取得元 (既定: apple-mail)")
     p.add_argument("--input-dir", help="--source eml-dir のときの .eml フォルダ")
     p.add_argument("--mail-dir", help="Mail.app のデータ位置を上書きする(検証用)")
+    p.add_argument("--mailbox", action="append", metavar="名前",
+                   help="このメールボックスだけ集計する。複数回指定できる。"
+                        "名前は --list-mailboxes の出力をそのまま渡す")
+    p.add_argument("--list-mailboxes", action="store_true",
+                   help="Mail.app のメールボックス一覧を出して終わる")
+    p.add_argument("--all-mailboxes", action="store_true",
+                   help="既定で除外しているメールボックス(ゴミ箱・迷惑メール・下書き・送信済み)も読む")
     p.add_argument("--since", type=ymd, metavar="YYYY-MM-DD", help="この日以降のメールだけ対象にする")
     p.add_argument("--until", type=ymd, metavar="YYYY-MM-DD", help="この日以前のメールだけ対象にする")
     p.add_argument("--output", default="summary.csv", help="集計CSVの出力先")
     p.add_argument("--detail-output", help="明細CSVも出す場合のパス")
     p.add_argument("--quiet", action="store_true", help="進捗表示を出さない")
+    p.add_argument("--keep-duplicates", action="store_true",
+                   help="同じ取引が複数の通知で届いたぶんも、そのまま数える")
+    p.add_argument("--duplicate-window", type=int, default=3, metavar="日数",
+                   help="同じ請求元・同じ金額を同じ取引とみなす日数の幅 (既定 3)")
     return p.parse_args(argv)
+
+
+def print_duplicates(dropped: list[tuple]) -> None:
+    """寄せたぶんを必ず出す。**黙って消すと、正しい額との差の理由が消える。**
+
+    同額の買い物を本当に2回した人を潰しうる操作なので、
+    利用者が「これは別の買い物だ」と気づける形にしておく。
+    """
+    if not dropped:
+        return
+    print(f"\n同じ取引とみなして {len(dropped)} 件を寄せました "
+          f"(--keep-duplicates で寄せずに数えます):", file=sys.stderr)
+    for record, kept in dropped[:20]:
+        print(f"  {record.date}  {record.merchant}  "
+              f"{format_money(record.amount, record.currency)}  «{record.subject[:32]}»",
+              file=sys.stderr)
+        print(f"  {'':12}  ↑ {kept.date} の «{kept.subject[:32]}» と同じ取引とみなしました",
+              file=sys.stderr)
+    if len(dropped) > 20:
+        print(f"  ... 他 {len(dropped) - 20} 件", file=sys.stderr)
 
 
 def collect(source, args) -> tuple[list[Record], int, int, int, int]:
@@ -128,6 +177,12 @@ def collect(source, args) -> tuple[list[Record], int, int, int, int]:
     for r in records:
         r.merchant = alias.get(r.merchant, r.merchant)
 
+    # 表記を寄せたあとで取引を寄せる。順序が逆だと、同じ相手の別表記が
+    # 別の請求元に見えて、同じ取引だと分からない。
+    if not args.keep_duplicates:
+        records, dropped = collapse_duplicates(records, args.duplicate_window)
+        print_duplicates(dropped)
+
     if unsupported:
         # 黙って件数だけ減らすと、利用者は「足りない」理由に辿り着けない。
         print(f"\n読めない形式が {len(unsupported)} 件ありました:", file=sys.stderr)
@@ -159,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
         for name in source.list_folders():
             print(name)
         source.close()
+        return 0
+
+    if args.list_mailboxes:
+        if not isinstance(source, AppleMailSource):
+            sys.exit("--list-mailboxes は --source apple-mail のときだけ使えます")
+        print_mailboxes(source.mailbox_counts())
         return 0
 
     if not args.quiet:
