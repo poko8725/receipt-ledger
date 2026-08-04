@@ -426,6 +426,82 @@ def repeat_purchase_b() -> bytes:
     return _order_mail("16", "ご注文ありがとうございます", 20)
 
 
+# ---------------------------------------------------------------- 17
+def ad_product_price() -> bytes:
+    """広告メール。載っているのは製品の値段で、払った額ではない。
+
+    金額の文脈(3,000円相当・送料無料など)は1つも当たらない。
+    「¥599,800」は裸で置かれていて、支払われた額と字面が区別できないため、
+    **数字を見ている限り正しく通ってしまう**。落とせるのは
+    「このメールが取引か」を見る層だけで、判断材料は件名にしかない。
+
+    フッタに「購入履歴」があるのが要点。本文全体で取引の語を探す実装だと、
+    ここに救われて広告が通る。実データではこの形が最大の誤検出で、
+    1通で ¥599,800 が支出に立っていた。
+    """
+    head = crlf(
+        "From: Apple <no_reply@email.apple.com>\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?" + base64.b64encode("新しいヘッドセット、登場。".encode()).decode() + "?=\n"
+        "Date: Thu, 16 Oct 2025 10:00:00 +0900\n"
+        "Message-ID: <fixture-17@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    body = (
+        "新しいヘッドセット ¥599,800（税込）から\n"
+        "Apple Account ・ 購入履歴 ・ 販売条件 ・ プライバシーポリシー\n"
+    )
+    return head + body.encode("utf-8")
+
+
+# ---------------------------------------------------------------- 18
+def card_statement() -> bytes:
+    """カード会社の請求額通知。件名に「支払」が入るので語では落とせない。
+
+    中身は個々の取引ではなく1か月の合計なので、明細と一緒に数えると二重になる。
+    発行元でしか落とせないことを、両実装で同じに保つための1件。
+    法人格つきの表記(「◯◯カード株式会社」)で来るのが要点で、
+    完全一致で持っている実装はここを素通りする。
+    """
+    head = crlf(
+        "From: =?UTF-8?B?" + base64.b64encode("楽天カード株式会社".encode()).decode() + "?= <info@mail.rakuten-card.example>\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?" + base64.b64encode("お支払い金額のご案内".encode()).decode() + "?=\n"
+        "Date: Fri, 10 Oct 2025 10:00:00 +0900\n"
+        "Message-ID: <fixture-18@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    body = "楽天カード株式会社\nご請求金額 47,618 円\n"
+    return head + body.encode("utf-8")
+
+
+# ---------------------------------------------------------------- 19
+def bare_subject_receipt() -> bytes:
+    """件名が請求元の名前だけの領収書。**落としてはいけない側**。
+
+    非取引の判定を件名だけで行うと、これが消える。落ちても例外は出ず、
+    合計が静かに小さくなるので、弾く側のテストより先にこちらが要る。
+    本文で金額が「合計」として立っていることを根拠に残す。
+    """
+    head = crlf(
+        "From: service@paypal.co.jp\n"
+        "To: user@example.com\n"
+        "Subject: PayPal\n"
+        "Date: Sat, 11 Oct 2025 10:00:00 +0900\n"
+        "Message-ID: <fixture-19@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    body = "マーチャント EXAMPLE STORE\n合計 ¥630 JPY\n"
+    return head + body.encode("utf-8")
+
+
+
 FIXTURES = {
     "01-iso2022jp-escape.eml": iso2022jp_escape,
     "02-html-entity-amount.eml": html_entity_amount,
@@ -443,6 +519,9 @@ FIXTURES = {
     "14-order-shipped.eml": order_shipped,
     "15-repeat-purchase-a.eml": repeat_purchase_a,
     "16-repeat-purchase-b.eml": repeat_purchase_b,
+    "17-ad-product-price.eml": ad_product_price,
+    "18-card-statement.eml": card_statement,
+    "19-bare-subject-receipt.eml": bare_subject_receipt,
 }
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 from .analyze import Record, UnsupportedFormat, analyze
@@ -95,6 +96,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output", default="summary.csv", help="集計CSVの出力先")
     p.add_argument("--detail-output", help="明細CSVも出す場合のパス")
     p.add_argument("--quiet", action="store_true", help="進捗表示を出さない")
+    p.add_argument("--keep-non-transactions", action="store_true",
+                   help="取引でないと判断したメール(広告・私信・カード明細通知・値上げ予告)も数える")
     p.add_argument("--keep-duplicates", action="store_true",
                    help="同じ取引が複数の通知で届いたぶんも、そのまま数える")
     p.add_argument("--duplicate-window", type=int, default=3, metavar="日数",
@@ -122,6 +125,30 @@ def print_duplicates(dropped: list[tuple]) -> None:
         print(f"  ... 他 {len(dropped) - 20} 件", file=sys.stderr)
 
 
+def print_non_transactions(dropped: list[tuple]) -> None:
+    """取引でないと判断して落としたぶんを必ず出す。
+
+    **金額の大きい順に出す。**この判定が誤ると合計が静かに小さくなり、
+    件数を眺めても気づけない。桁の大きいものから見せれば、
+    領収書を1件落としただけでも目に入る。
+    """
+    if not dropped:
+        return
+    total: dict[str, Decimal] = {}
+    for _, record in dropped:
+        total[record.currency] = total.get(record.currency, Decimal(0)) + record.amount
+    sums = " / ".join(format_money(v, c) for c, v in sorted(total.items()))
+    print(f"\n取引でないと判断して {len(dropped)} 件（{sums}）を除きました "
+          f"(--keep-non-transactions で残せます):", file=sys.stderr)
+    for reason, record in sorted(dropped, key=lambda x: -x[1].amount)[:15]:
+        print(f"  {record.date}  {record.merchant}  "
+              f"{format_money(record.amount, record.currency)}  «{record.subject[:36]}»",
+              file=sys.stderr)
+        print(f"  {'':12}  ↑ {reason}", file=sys.stderr)
+    if len(dropped) > 15:
+        print(f"  ... 他 {len(dropped) - 15} 件", file=sys.stderr)
+
+
 def collect(source, args) -> tuple[list[Record], int, int, int, int]:
     records: list[Record] = []
     scanned = 0
@@ -130,6 +157,7 @@ def collect(source, args) -> tuple[list[Record], int, int, int, int]:
     filtered = 0
     duplicated = 0
     seen: set[str] = set()
+    non_transactions: list[tuple[str, Record]] = []
 
     for message in source.iter_messages():
         scanned += 1
@@ -167,10 +195,20 @@ def collect(source, args) -> tuple[list[Record], int, int, int, int]:
             ):
                 filtered += 1
                 continue
+
+        # 期間で絞ったあとに判定する。順序が逆だと、範囲外のメールまで
+        # 「落としたもの」として並び、利用者が見る分量が期間と無関係に増える。
+        reason = record.non_transaction
+        if reason and not args.keep_non_transactions:
+            non_transactions.append((reason, record))
+            continue
+
         records.append(record)
 
     if not args.quiet and scanned >= 500:
         print(" " * 40, end="\r", file=sys.stderr)
+
+    print_non_transactions(non_transactions)
 
     # 同じ相手が複数の表記で届くので、集計前に寄せる
     alias = canonicalize_merchants([r.merchant for r in records])

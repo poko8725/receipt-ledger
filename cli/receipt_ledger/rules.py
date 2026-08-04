@@ -92,8 +92,14 @@ _NOT_PAID_BEFORE = re.compile(
 )
 _NOT_PAID_AFTER = re.compile(
     # 括弧書き(「(税込)」など)を1つだけ挟むのは許して、その先で判定する。
-    r"^\s*(?:\([^()（）]{0,8}\)|（[^()（）]{0,8}）)?\s*"
-    r"(?:相当|以上|以下|未満|ポイント|ﾎﾟｲﾝﾄ|OFF|オフ|割引|引き|還元|お得|分の)",
+    # 通貨の後置(「円」など)も挟んでよい。ラベル付きの一致(「総額 116,570」)は
+    # 数字で終わるため、直後が「円の品が」となって判定を外していた。
+    r"^\s*(?:円|JPY|USD|EUR|GBP)?\s*(?:\([^()（）]{0,8}\)|（[^()（）]{0,8}）)?\s*"
+    # 「総額116,570円の品が 80,000 円」のように、値引き前の定価を提示してから
+    # 実売価格を出す販促文がある。**ラベル(総額/合計)が付いているので、金額としては
+    # 領収書と同じ形に見える**。直後の「の品が」「のところ」で定価だと分かる。
+    r"(?:相当|以上|以下|未満|ポイント|ﾎﾟｲﾝﾄ|OFF|オフ|割引|引き|還元|お得|分の"
+    r"|の品|のところ|の商品が|するところ)",
     re.IGNORECASE,
 )
 
@@ -118,6 +124,86 @@ _PROGRESS_SUBJECT = re.compile(
     r"on\s+its\s+way|out\s+for\s+delivery|delivered",
     re.IGNORECASE,
 )
+
+
+# 件名に「取引があった」ことを示す語。**1つも無ければ取引ではない**と判定する。
+#
+# 金額の文脈(is_paid_amount)を見るだけでは、そのメールが取引かどうかは分からない。
+# 広告メールに載っている製品価格、私信の本文に書かれた金額、値上げ予告の旧料金は、
+# どれも「支払われた額」の形をしているので文脈判定を素通りする。
+# 2025-01 以降の実データ 613 件では、この語が件名に1つも無いものはすべて非取引だった
+# (Apple の新製品案内 ¥599,800、私信 ¥66,888 ×5 など)。
+#
+# **弾く側なので、増やすときは取りこぼしのほうを疑うこと。**
+# 領収書なのに落ちると、合計が静かに小さくなって気づけない。
+TRANSACTION_EVIDENCE = re.compile(
+    r"領収書|レシート|受領|注文|購入|決済|支払|明細|請求|お届け|"
+    r"チャージ完了|チャージが完了|受付|承りました|"
+    r"receipt|invoice|order|payment|purchase|charged|confirmation|billing",
+    re.IGNORECASE,
+)
+
+# カード会社が送る請求額の通知。件名に「支払」「請求」が入るので上の判定は通るが、
+# 中身は**個々の取引ではなく1か月の合計**なので、明細と一緒に数えると二重になる。
+# 発行元で落とすしかない(件名だけでは領収書と区別が付かない)。
+STATEMENT_ISSUERS = {
+    "Moneytree", "三井住友カード", "エポスカード", "楽天カード", "JCB", "セゾンカード",
+}
+
+# 値上げ・改定の予告。新旧2つの金額が本文に並ぶので、片方を拾ってしまう。
+# 実際に課金された額は別途、通常の領収書として届く。
+_REVISION_SUBJECT = re.compile(
+    r"料金の改定|価格の改定|改定のお知らせ|price\s+change", re.IGNORECASE
+)
+
+
+# 「合計」「Total」などのラベルが付いた金額。**領収書の本文にしか出ない形**。
+#
+# 件名だけで判定すると、件名が素っ気ない領収書(件名が "PayPal" だけ、など)を
+# 落としてしまう。落ちても例外は出ず、合計が静かに小さくなるだけなので気づけない。
+# 一方、本文を全部見るのは弾く力が落ちる。Apple の広告メールはフッタに
+# 「Apple Account ・ 購入履歴 ・ 販売条件」と書いてあり、"購入" が本文に出てしまう。
+#
+# ラベル付きの金額なら、その差を分けられる。広告に載る製品価格は
+# 「¥599,800」と裸で置かれ、「合計 ¥599,800」とは書かれない。
+# 本文のどこかにラベル付きの金額があるだけでは足りない。**拾った金額そのものに
+# ラベルが付いているか**まで見る。販促メールにも「セット合計」のような別の合計が
+# 載っていることがあり、本文全体を見ると、そこに救われて広告が通ってしまう。
+_LABELED_AMOUNT = re.compile(
+    _LABEL + r"\s*[:：]?\s*(?:" + _PRE + r")?\s*(?P<num>" + _NUM + r")", re.IGNORECASE
+)
+
+
+def has_labeled_amount(body: str, amount: Decimal) -> bool:
+    """本文で、その金額に「合計」「Total」などのラベルが付いているか。"""
+    for m in _LABELED_AMOUNT.finditer(body):
+        try:
+            if Decimal(m.group("num").replace(",", "")) == amount:
+                return True
+        except InvalidOperation:
+            continue
+    return False
+
+
+def non_transaction_reason(
+    subject: str, merchant: str, body: str = "", amount: Decimal | None = None
+) -> str | None:
+    """このメールが取引でないと判断できる理由。取引なら None。
+
+    **呼び出し側は、落とした件数と中身を必ず利用者に見せること。**
+    黙って落とすと、合計が小さくなったことに気づけない。
+    """
+    # 完全一致では取りこぼす。同じ発行元が「楽天カード」「楽天カード株式会社」の
+    # 両方で届き、法人格を付けたほうだけ素通りしていた。
+    if any(issuer in merchant for issuer in STATEMENT_ISSUERS):
+        return "カード明細通知（合計であって取引ではない）"
+    if _REVISION_SUBJECT.search(subject):
+        return "料金改定の予告（実際の課金は別途届く）"
+    if TRANSACTION_EVIDENCE.search(subject):
+        return None
+    if amount is not None and body and has_labeled_amount(body, amount):
+        return None     # 件名は素っ気ないが、その金額が本文で合計として立っている
+    return "取引を示す語が件名に無い（広告・通知・私信）"
 
 
 def is_same_transaction(a, b) -> bool:

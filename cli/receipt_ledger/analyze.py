@@ -17,7 +17,8 @@ from email.header import decode_header
 from email.utils import parsedate_to_datetime
 
 from .parsers import parse_receipt
-from .rules import extract_amount, identify_merchant, title_from_item
+from .rules import (extract_amount, identify_merchant, non_transaction_reason,
+                    title_from_item)
 from .sources.base import RawMessage
 
 
@@ -46,6 +47,13 @@ class Record:
     currency: str = "JPY"
     mailbox: str = ""
     message_id: str = ""
+
+    non_transaction: str = ""
+    """取引でないと判断した理由。取引なら空。
+
+    ここで捨てずに理由を載せて返すのは、**落とした件数と中身を利用者に見せる**ため。
+    黙って None を返すと「金額が取れなかった」と同じ扱いになり、合計が静かに減る。
+    """
 
     billed_by: str = ""
     """タイトルで上書きする前の請求元。取引の相手方を出したいときはこちら。
@@ -207,6 +215,7 @@ def analyze(message: RawMessage) -> Record | None:
         merchant = title
 
     return Record(
+        non_transaction=non_transaction_reason(subject, merchant, body, amount),
         uid=message.uid,
         origin=message.origin,
         date=dt.strftime("%Y-%m-%d") if dt else "不明",

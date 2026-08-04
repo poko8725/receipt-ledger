@@ -57,6 +57,9 @@ def run() -> dict[str, dict | None]:
             "amount": float(record.amount),
             "currency": record.currency,
             "date": record.date,
+            # 「そのメールが取引か」の判定。ここを出さないと、
+            # 装置は解析結果だけを見て、弾く側の食い違いを見逃す。
+            "non_transaction": record.non_transaction or "",
         }
         # CSV に書く直前の形。解析結果が同じでも、ここで割れれば
         # 片方の出力だけ数式として実行される。

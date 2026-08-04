@@ -819,6 +819,7 @@
     </div>
 
     <div class="skip-note" id="skipNote"></div>
+<details id="nonTx" class="detail-toggle" style="display:none"></details>
 
     <div class="report-row" id="reportRow">
       <button type="button" id="makeReport">うまく分類できなかった分を報告する</button>
@@ -1133,7 +1134,66 @@ const _NOT_PAID_BEFORE =
   /(?:×|✕|新料金|旧料金|現行料金|改定後|改定前|値上げ後|値下げ後)[\s:：=＝¥￥$€£]*$/;
 const _NOT_PAID_AFTER =
   // 括弧書き(「(税込)」など)を1つだけ挟むのは許して、その先で判定する。
-  /^\s*(?:\([^()（）]{0,8}\)|（[^()（）]{0,8}）)?\s*(?:相当|以上|以下|未満|ポイント|ﾎﾟｲﾝﾄ|OFF|オフ|割引|引き|還元|お得|分の)/i;
+  // 通貨の後置(「円」など)も挟んでよい。ラベル付きの一致(「総額 116,570」)は
+  // 数字で終わるため、直後が「円の品が」となって判定を外していた。
+  // 「総額116,570円の品が 80,000 円」のような、値引き前の定価を出す販促文で踏む。
+  /^\s*(?:円|JPY|USD|EUR|GBP)?\s*(?:\([^()（）]{0,8}\)|（[^()（）]{0,8}）)?\s*(?:相当|以上|以下|未満|ポイント|ﾎﾟｲﾝﾄ|OFF|オフ|割引|引き|還元|お得|分の|の品|のところ|の商品が|するところ)/i;
+
+// 件名に「取引があった」ことを示す語。**1つも無ければ取引ではない**と判定する。
+//
+// 金額の文脈(isPaidAmount)を見るだけでは、そのメールが取引かどうかは分からない。
+// 広告メールに載っている製品価格、私信の本文に書かれた金額、値上げ予告の旧料金は、
+// どれも「支払われた額」の形をしているので文脈判定を素通りする。
+// 実データ 613 件で、この語が件名に1つも無いものはすべて非取引だった
+// (Apple の新製品案内 ¥599,800、私信 ¥66,888 ×5 など、計上額の 53%)。
+//
+// **弾く側なので、増やすときは取りこぼしのほうを疑うこと。**
+// 領収書なのに落ちると、合計が静かに小さくなって気づけない。
+const TRANSACTION_EVIDENCE =
+  /領収書|レシート|受領|注文|購入|決済|支払|明細|請求|お届け|チャージ完了|チャージが完了|受付|承りました|receipt|invoice|order|payment|purchase|charged|confirmation|billing/i;
+
+// カード会社が送る請求額の通知。件名に「支払」「請求」が入るので上の判定は通るが、
+// 中身は**個々の取引ではなく1か月の合計**なので、明細と一緒に数えると二重になる。
+// 発行元で落とすしかない(件名だけでは領収書と区別が付かない)。
+// 完全一致では取りこぼす。同じ発行元が「楽天カード」「楽天カード株式会社」の
+// 両方で届き、法人格を付けたほうだけ素通りしていた。
+const STATEMENT_ISSUERS =
+  ["Moneytree", "三井住友カード", "エポスカード", "楽天カード", "JCB", "セゾンカード"];
+
+// 値上げ・改定の予告。新旧2つの金額が本文に並ぶので、片方を拾ってしまう。
+// 実際に課金された額は別途、通常の領収書として届く。
+const _REVISION_SUBJECT = /料金の改定|価格の改定|改定のお知らせ|price\s+change/i;
+
+// 本文のどこかにラベル付きの金額があるだけでは足りない。**拾った金額そのものに
+// ラベルが付いているか**まで見る。販促メールにも「セット合計」のような別の合計が
+// 載っていることがあり、本文全体を見ると、そこに救われて広告が通ってしまう。
+const _LABELED_AMOUNT =
+  new RegExp(`${_LABEL}\\s*[:：]?\\s*(?:${_PRE})?\\s*(${_NUM})`, "gi");
+
+function hasLabeledAmount(body, amount) {
+  _LABELED_AMOUNT.lastIndex = 0;
+  let m;
+  while ((m = _LABELED_AMOUNT.exec(body)) !== null) {
+    const n = Number(m[1].replace(/,/g, ""));
+    if (Number.isFinite(n) && n === Number(amount)) return true;
+  }
+  return false;
+}
+
+// このメールが取引でないと判断できる理由。取引なら null。
+//
+// **呼び出し側は、落とした件数と中身を必ず利用者に見せること。**
+// 黙って落とすと、合計が小さくなったことに気づけない。
+function nonTransactionReason(subject, merchant, body, amount) {
+  if (STATEMENT_ISSUERS.some(issuer => (merchant || "").includes(issuer))) {
+    return "カード明細通知（合計であって取引ではない）";
+  }
+  if (_REVISION_SUBJECT.test(subject)) return "料金改定の予告（実際の課金は別途届く）";
+  if (TRANSACTION_EVIDENCE.test(subject)) return null;
+  // 件名は素っ気ないが、その金額が本文で合計として立っている領収書は残す。
+  if (body && amount != null && hasLabeledAmount(body, amount)) return null;
+  return "取引を示す語が件名に無い（広告・通知・私信）";
+}
 
 // 1つの取引の進み具合を知らせる件名。**これが無ければ寄せない。**
 //
@@ -1651,6 +1711,9 @@ function readFileAsBinaryString(file) {
 let allRecords = [];
 let lastSkipped = 0;   // レート変更時に同じ状態で描き直すため保持する
 let lastDuplicated = 0;
+let lastMerged = 0;              // 同じ取引の別通知として寄せた件数
+let lastNonTransactions = [];    // 取引でないと判断して除いたもの
+let lastMergedItems = [];        // 同じ取引として寄せたぶん
 const seenMessageIds = new Set();  // 読み込み済みメールの Message-ID
 
 // 描画に順番を譲る。
@@ -1686,6 +1749,7 @@ async function handleFiles(fileList) {
   }
 
   const records = [];
+  const nonTransactions = [];
   let skipped = 0;
   let duplicated = 0;
 
@@ -1713,6 +1777,16 @@ async function handleFiles(fileList) {
       const found = extractAmount(subject) ?? extractAmount(body);
       if (found === null) { skipped++; continue; }
       const { merchant, item } = resolveMerchant(from, subject, body);
+      // 金額の形をしていても、そのメール自体が取引でないことがある。
+      // 落としたぶんは下に一覧で出す(黙って消すと合計が静かに小さくなる)。
+      const reason = nonTransactionReason(subject, merchant, body, found.amount);
+      if (reason) {
+        nonTransactions.push({
+          date: dateOnlyFromHeader(date) ?? "不明",
+          merchant, amount: found.amount, currency: found.currency, subject, reason,
+        });
+        continue;
+      }
       records.push({
         file: file.name,
         date: dateOnlyFromHeader(date) ?? "不明",
@@ -1741,6 +1815,16 @@ async function handleFiles(fileList) {
   const alias = canonicalizeMerchants(allRecords.map(r => r.merchant));
   for (const r of allRecords) r.merchant = alias.get(r.merchant) || r.merchant;
 
+  // 表記を寄せたあとで取引を寄せる。順序が逆だと、同じ相手の別表記が
+  // 別の請求元に見えて、同じ取引だと分からない。
+  // (この呼び出しが無く、collapseDuplicates が定義だけで死んでいた。
+  //  CLI は既定で寄せているので、同じ .eml でも合計が食い違っていた)
+  const { kept, dropped: merged } = collapseDuplicates(allRecords);
+  lastMerged = merged.length;
+  lastMergedItems = merged;
+  allRecords = kept;
+
+  lastNonTransactions = lastNonTransactions.concat(nonTransactions);
   renderResults(skipped);
 }
 
@@ -1867,7 +1951,36 @@ function renderResults(skipped) {
   const notes = [];
   if (skipped > 0) notes.push(`${skipped} 件のメールは金額を抽出できずスキップしました`);
   if (lastDuplicated > 0) notes.push(`${lastDuplicated} 件は同じメールの重複として除外しました`);
+  if (lastMerged > 0) notes.push(`${lastMerged} 件は同じ取引の別々の通知として寄せました`);
   skipNote.textContent = notes.join(" / ");
+
+  renderNonTransactions();
+}
+
+// 取引でないと判断して除いたものを必ず見せる。
+//
+// **金額の大きい順に出す。**この判定が誤ると合計が静かに小さくなり、
+// 件数を眺めても気づけない。桁の大きいものから見せれば、
+// 領収書を1件落としただけでも目に入る。
+function renderNonTransactions() {
+  const box = document.getElementById("nonTx");
+  if (!box) return;
+  if (lastNonTransactions.length === 0) { box.style.display = "none"; return; }
+  const totals = new Map();
+  for (const r of lastNonTransactions) {
+    totals.set(r.currency, (totals.get(r.currency) || 0) + Number(r.amount));
+  }
+  const sums = [...totals].sort().map(([c, v]) => formatMoney(v, c)).join(" / ");
+  const rows = [...lastNonTransactions]
+    .sort((a, b) => Number(b.amount) - Number(a.amount))
+    .map(r => `
+      <div class="detail-item">
+        <div class="left"><span class="date">${r.date}</span>${escapeHtml(r.merchant)} — ${escapeHtml(r.subject.slice(0, 40))}<br>
+          <span class="empty-note">↑ ${escapeHtml(r.reason)}</span></div>
+        <div class="right">${formatMoney(r.amount, r.currency)}</div>
+      </div>`).join("");
+  box.style.display = "block";
+  box.innerHTML = `<summary>取引でないと判断して ${lastNonTransactions.length} 件（${sums}）を除きました</summary>${rows}`;
 }
 
 // カテゴリ別の集計。請求元別より先に見せる。判断に使うのはこちらのため。
