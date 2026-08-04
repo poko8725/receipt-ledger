@@ -56,6 +56,12 @@ class NotPaidAmount(unittest.TestCase):
         text = "期間中、無料で「十の導き」を5回、合計50回分の「導き」を行えます。"
         self.assertIsNone(extract_amount(text))
 
+    def test_期間あたりの料率は支払いではない(self):
+        # カート放棄を促す広告に出る形。件名に "Purchase" が入るので
+        # 「取引を示す語」の判定は通ってしまい、ここでしか落とせない。
+        self.assertIsNone(extract_amount("EXAMPLE 365 BASIC USD 19.99/year"))
+        self.assertIsNone(extract_amount("Example 365 Basic USD 1.99/month"))
+
     def test_値引き前の定価は支払いではない(self):
         # 「総額116,570円の品が 80,000 円」。ラベル付きで、通貨の後置を挟む。
         text = "生豆8種類が合計4kg付いてお得！ 総額116,570円の品が 80,000 円"

@@ -102,7 +102,10 @@ _NOT_PAID_AFTER = re.compile(
     r"|の品|のところ|の商品が|するところ"
     # 「200円につき1マイル」はレート、「合計50回分の導き」は回数。
     # どちらも広告の本文にあり、ラベル付きで書かれることもあるので金額に見える。
-    r"|につき|あたり|回|個|点|名|件|枚|本|冊|台|マイル)",
+    r"|につき|あたり|回|個|点|名|件|枚|本|冊|台|マイル"
+    # 「USD 19.99/year」はプランの料率。カート放棄を促す広告に出る形で、
+    # 払った額ではない。領収書側は「Amount charged」等のラベルが先に当たる。
+    r"|/\s*(?:year|month|mo|yr|week|day)\b|／\s*(?:年|月|週|日))",
     re.IGNORECASE,
 )
 
@@ -226,6 +229,36 @@ def is_same_transaction(a, b) -> bool:
     return bool(_PROGRESS_SUBJECT.search(a.subject) or _PROGRESS_SUBJECT.search(b.subject))
 
 
+# 決済代行そのものが請求元として残った記録。
+#
+# PayPal の領収書は本文の「マーチャント」欄から実際の請求先を読むが、
+# 定期支払いの通知など、その欄が無い形式で届くことがある。読めなかったものは
+# 請求元が「PayPal」のまま残る。**このとき、同じ支払いを加盟店側も別途知らせてくる**
+# ので、1回の支払いが2件になる。実データでは 2 件あった
+# (鳴潮 ¥610 / MuMuPlayer Pro $72.00)。
+#
+# 請求元が違うので通常の重複判定では寄らない。決済代行として残っているという
+# ことは「相手が分からなかった通知」なので、同額・同通貨・近い日付の
+# 加盟店側の記録があれば、それと同じ取引だと見てよい。
+PAYMENT_PROCESSORS = {"paypal", "stripe", "square", "amazon pay", "google pay", "apple pay"}
+
+
+def is_payment_processor(merchant: str) -> bool:
+    """請求元が決済代行のまま残っているか（＝実際の相手を読めなかった通知）。"""
+    return (merchant or "").strip().lower() in PAYMENT_PROCESSORS
+
+
+def _same_payer(a, b, name_of) -> bool:
+    """同じ相手として扱ってよいか。
+
+    片方が決済代行のまま残っているなら、名前が違っても同じ取引でありうる。
+    両方が決済代行のときは寄せない（別々の支払いを潰す）。
+    """
+    if name_of(a) == name_of(b):
+        return True
+    return is_payment_processor(name_of(a)) != is_payment_processor(name_of(b))
+
+
 def collapse_duplicates(records: list, window_days: int = 3,
                         key=None) -> tuple[list, list[tuple]]:
     """同じ取引が複数の通知で届いたぶんを寄せる。残す側と、寄せた側を返す。
@@ -262,17 +295,35 @@ def collapse_duplicates(records: list, window_days: int = 3,
             for candidate in kept:
                 if candidate.date == "不明":
                     continue
-                if (name_of(candidate), candidate.currency, candidate.amount) != (
-                    name_of(record), record.currency, record.amount
+                if (candidate.currency, candidate.amount) != (
+                    record.currency, record.amount
                 ):
                     continue
+                if not _same_payer(candidate, record, name_of):
+                    continue
                 if _days_between(candidate.date, record.date) > window_days:
+                    continue
+                # 決済代行が絡む組は、件名から進み具合が読めない
+                # (「自動支払いを行いました」と "Subscription Confirmation")。
+                # 相手を読めなかった通知であること自体が根拠になる。
+                # 「どちらか一方だけ」が決済代行のときに限る。両方が決済代行なら、
+                # 相手を読めなかった通知が2つ来ただけで、別々の支払いかもしれない。
+                if is_payment_processor(name_of(candidate)) != is_payment_processor(name_of(record)):
+                    if candidate.subject != record.subject:
+                        match = candidate
+                        break
                     continue
                 if is_same_transaction(candidate, record):
                     match = candidate
                     break
         if match is not None:
-            dropped.append((record, match))
+            # 残すのは相手が分かっているほう。決済代行の記録が先に居たら入れ替える。
+            # 「PayPal ¥610」より「鳴潮 ¥610」のほうが後から使える。
+            if is_payment_processor(name_of(match)) and not is_payment_processor(name_of(record)):
+                kept[kept.index(match)] = record
+                dropped.append((match, record))
+            else:
+                dropped.append((record, match))
         else:
             kept.append(record)
     return kept, dropped

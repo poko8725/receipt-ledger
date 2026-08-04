@@ -502,6 +502,74 @@ def bare_subject_receipt() -> bytes:
 
 
 
+# ---------------------------------------------------------------- 20
+def processor_notice() -> bytes:
+    """決済代行の定期支払い通知。本文に「マーチャント」欄が無い。
+
+    PayPal の領収書は本文の「マーチャント」欄から実際の請求先を読むが、
+    この形式にはその欄が無く、請求元が「PayPal」のまま残る。
+    同じ支払いを加盟店側も別途知らせてくるので(21番)、寄せないと1回の
+    支払いが2件になる。請求元が違うので通常の重複判定では寄らない。
+    """
+    head = crlf(
+        "From: service-jp@paypal.example\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?" + base64.b64encode("Example Playerへの自動支払いを行いました".encode()).decode() + "?=\n"
+        "Date: Tue, 16 Sep 2025 10:00:00 +0900\n"
+        "Message-ID: <fixture-20@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    body = "Example Playerにお支払いいただきありがとうございます\n取引ID 0GB518125J611015L\n支払金額\n$72.00 USD\n"
+    return head + body.encode("utf-8")
+
+
+# ---------------------------------------------------------------- 21
+def merchant_side_receipt() -> bytes:
+    """20番と同じ支払いを、加盟店側が別に知らせてくる領収書。
+
+    件名から進み具合は読めない(「自動支払いを行いました」と
+    "Subscription Confirmation")ので、_PROGRESS_SUBJECT では寄らない。
+    **残すのはこちら**。「PayPal $72.00」より請求先が分かるぶん後から使える。
+    """
+    head = crlf(
+        "From: Example Player <noreply@player.example>\n"
+        "To: user@example.com\n"
+        "Subject: Example Player - Subscription Confirmation\n"
+        "Date: Tue, 16 Sep 2025 12:00:00 +0900\n"
+        "Message-ID: <fixture-21@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    body = "Thank you for subscribing!\n- Plan Type: Annual\n- Amount Charged: $72.00\n"
+    return head + body.encode("utf-8")
+
+
+# ---------------------------------------------------------------- 22
+def plan_rate_not_charge() -> bytes:
+    """カート放棄を促す広告。載っているのはプランの料率で、払った額ではない。
+
+    件名に "Purchase" が入るので「取引を示す語」の判定は通る。
+    落とせるのは金額の文脈の側で、「USD 19.99/year」の "/year" が根拠になる。
+    実データでは 2 通あり、どちらも支払いは発生していなかった。
+    """
+    head = crlf(
+        "From: Example365 <noreply@infomail.example>\n"
+        "To: user@example.com\n"
+        "Subject: Action Required: Finish Your Example 365 Purchase\n"
+        "Date: Tue, 30 Jan 2024 10:00:00 +0900\n"
+        "Message-ID: <fixture-22@example.invalid>\n"
+        "Content-Type: text/plain; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    body = "Complete your purchase\nView your cart and confirm your order details\nEXAMPLE 365 BASIC\nUSD 19.99/year\n"
+    return head + body.encode("utf-8")
+
+
+
 FIXTURES = {
     "01-iso2022jp-escape.eml": iso2022jp_escape,
     "02-html-entity-amount.eml": html_entity_amount,
@@ -522,6 +590,9 @@ FIXTURES = {
     "17-ad-product-price.eml": ad_product_price,
     "18-card-statement.eml": card_statement,
     "19-bare-subject-receipt.eml": bare_subject_receipt,
+    "20-processor-notice.eml": processor_notice,
+    "21-merchant-side-receipt.eml": merchant_side_receipt,
+    "22-plan-rate-not-charge.eml": plan_rate_not_charge,
 }
 
 

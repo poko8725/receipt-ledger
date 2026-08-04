@@ -180,3 +180,57 @@ class KeyIsSelectable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CollapsesProcessorAndMerchant(unittest.TestCase):
+    """決済代行の通知と、加盟店側の領収書は同じ1回の支払い。
+
+    PayPal の領収書は本文の「マーチャント」欄から請求先を読むが、定期支払いの
+    通知にはその欄が無く、請求元が「PayPal」のまま残る。**加盟店も別途知らせて
+    くるので、寄せないと1回の支払いが2件になる。**実データで2件あった。
+    件名から進み具合は読めないので、_PROGRESS_SUBJECT では寄らない。
+    """
+
+    def test_決済代行と加盟店の通知を寄せる(self):
+        records = [
+            rec("2025-09-16", "PayPal", 72, "MuMu Playerへの自動支払いを行いました", "USD"),
+            rec("2025-09-16", "MuMuPlayer Pro", 72, "MuMuPlayer Pro - Subscription Confirmation", "USD"),
+        ]
+        kept, dropped = collapse_duplicates(records)
+        self.assertEqual(len(kept), 1)
+        # 残すのは相手が分かっているほう。後から使えるのはこちら。
+        self.assertEqual(kept[0].merchant, "MuMuPlayer Pro")
+
+    def test_決済代行が後から来ても加盟店を残す(self):
+        records = [
+            rec("2024-06-12", "鳴潮", 610, "領収書番号1433290951"),
+            rec("2024-06-12", "PayPal", 610, "PayPal支払い受領のご連絡"),
+        ]
+        kept, _ = collapse_duplicates(records)
+        self.assertEqual([r.merchant for r in kept], ["鳴潮"])
+
+    def test_決済代行どうしは寄せない(self):
+        # 相手が読めない通知が2つ来ただけで、別々の支払いかもしれない。
+        # 潰すと合計が静かに小さくなる。
+        records = [
+            rec("2025-09-16", "PayPal", 72, "Aへの自動支払いを行いました", "USD"),
+            rec("2025-09-16", "PayPal", 72, "Bへの自動支払いを行いました", "USD"),
+        ]
+        kept, _ = collapse_duplicates(records)
+        self.assertEqual(len(kept), 2)
+
+    def test_金額が違えば寄せない(self):
+        records = [
+            rec("2025-09-16", "PayPal", 72, "Xへの自動支払いを行いました", "USD"),
+            rec("2025-09-16", "X", 36, "X - Subscription Confirmation", "USD"),
+        ]
+        kept, _ = collapse_duplicates(records)
+        self.assertEqual(len(kept), 2)
+
+    def test_日付が窓の外なら寄せない(self):
+        records = [
+            rec("2025-09-16", "PayPal", 72, "Xへの自動支払いを行いました", "USD"),
+            rec("2025-09-30", "X", 72, "X - Subscription Confirmation", "USD"),
+        ]
+        kept, _ = collapse_duplicates(records)
+        self.assertEqual(len(kept), 2)

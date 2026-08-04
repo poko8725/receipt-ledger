@@ -1137,7 +1137,7 @@ const _NOT_PAID_AFTER =
   // 通貨の後置(「円」など)も挟んでよい。ラベル付きの一致(「総額 116,570」)は
   // 数字で終わるため、直後が「円の品が」となって判定を外していた。
   // 「総額116,570円の品が 80,000 円」のような、値引き前の定価を出す販促文で踏む。
-  /^\s*(?:円|JPY|USD|EUR|GBP)?\s*(?:\([^()（）]{0,8}\)|（[^()（）]{0,8}）)?\s*(?:相当|以上|以下|未満|ポイント|ﾎﾟｲﾝﾄ|OFF|オフ|割引|引き|還元|お得|分の|の品|のところ|の商品が|するところ|につき|あたり|回|個|点|名|件|枚|本|冊|台|マイル)/i;
+  /^\s*(?:円|JPY|USD|EUR|GBP)?\s*(?:\([^()（）]{0,8}\)|（[^()（）]{0,8}）)?\s*(?:相当|以上|以下|未満|ポイント|ﾎﾟｲﾝﾄ|OFF|オフ|割引|引き|還元|お得|分の|の品|のところ|の商品が|するところ|につき|あたり|回|個|点|名|件|枚|本|冊|台|マイル|\/\s*(?:year|month|mo|yr|week|day)\b|／\s*(?:年|月|週|日))/i;
 
 // 件名に「取引があった」ことを示す語。**1つも無ければ取引ではない**と判定する。
 //
@@ -1224,6 +1224,31 @@ function isSameTransaction(a, b) {
 // **それでも潰しうる**(同じ日に別の商品を同じ額で2回注文した場合)ので、
 // 消さずに返して、呼び出し側に必ず見せさせる。
 // 寄せる先は先に来たほう。注文が先で発送が後なので、注文日のほうが実態に近い。
+// 決済代行そのものが請求元として残った記録。
+//
+// PayPal の領収書は本文の「マーチャント」欄から実際の請求先を読むが、
+// 定期支払いの通知など、その欄が無い形式で届くことがある。読めなかったものは
+// 請求元が「PayPal」のまま残る。**このとき、同じ支払いを加盟店側も別途知らせてくる**
+// ので、1回の支払いが2件になる。実データでは 2 件あった
+// (鳴潮 ¥610 / MuMuPlayer Pro $72.00)。
+//
+// 請求元が違うので通常の重複判定では寄らない。決済代行として残っているという
+// ことは「相手が分からなかった通知」なので、同額・同通貨・近い日付の
+// 加盟店側の記録があれば、それと同じ取引だと見てよい。
+const PAYMENT_PROCESSORS =
+  ["paypal", "stripe", "square", "amazon pay", "google pay", "apple pay"];
+
+function isPaymentProcessor(merchant) {
+  return PAYMENT_PROCESSORS.includes((merchant || "").trim().toLowerCase());
+}
+
+// 片方が決済代行のまま残っているなら、名前が違っても同じ取引でありうる。
+// 両方が決済代行のときは寄せない（別々の支払いを潰す）。
+function samePayer(a, b, nameOf) {
+  if (nameOf(a) === nameOf(b)) return true;
+  return isPaymentProcessor(nameOf(a)) !== isPaymentProcessor(nameOf(b));
+}
+
 function collapseDuplicates(records, windowDays = 3, key = r => r.merchant) {
   const kept = [];
   const dropped = [];
@@ -1237,15 +1262,32 @@ function collapseDuplicates(records, windowDays = 3, key = r => r.merchant) {
     if (record.date !== "不明") {
       for (const candidate of kept) {
         if (candidate.date === "不明") continue;
-        if (key(candidate) !== key(record)) continue;
         if (candidate.currency !== record.currency) continue;
         if (candidate.amount !== record.amount) continue;
+        if (!samePayer(candidate, record, key)) continue;
         if (daysBetween(candidate.date, record.date) > windowDays) continue;
+        // 決済代行が絡む組は、件名から進み具合が読めない
+        // (「自動支払いを行いました」と "Subscription Confirmation")。
+        // 相手を読めなかった通知であること自体が根拠になる。
+        // 「どちらか一方だけ」が決済代行のときに限る。両方が決済代行なら、
+        // 相手を読めなかった通知が2つ来ただけで、別々の支払いかもしれない。
+        if (isPaymentProcessor(key(candidate)) !== isPaymentProcessor(key(record))) {
+          if (candidate.subject !== record.subject) { match = candidate; break; }
+          continue;
+        }
         if (isSameTransaction(candidate, record)) { match = candidate; break; }
       }
     }
-    if (match) dropped.push({ record, kept: match });
-    else kept.push(record);
+    if (match) {
+      // 残すのは相手が分かっているほう。決済代行の記録が先に居たら入れ替える。
+      // 「PayPal ¥610」より「鳴潮 ¥610」のほうが後から使える。
+      if (isPaymentProcessor(key(match)) && !isPaymentProcessor(key(record))) {
+        kept[kept.indexOf(match)] = record;
+        dropped.push({ record: match, kept: record });
+      } else {
+        dropped.push({ record, kept: match });
+      }
+    } else kept.push(record);
   }
   return { kept, dropped };
 }
