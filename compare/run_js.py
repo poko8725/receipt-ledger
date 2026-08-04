@@ -125,6 +125,8 @@ for (const [name, b64] of Object.entries(CASES)) {
       // 「そのメールが取引か」の判定。ここを出さないと、
       // 装置は解析結果だけを見て、弾く側の食い違いを見逃す。
       non_transaction: nonTransactionReason(subject, merchant, body, found.amount) ?? "",
+      // 分類ルールは両実装に手で写しているので、ここも突き合わせる。
+      category: categoryOf(merchant),
     };
     // CSV に書く直前の形。解析結果が同じでも、ここで割れれば
     // 片方の出力だけ数式として実行される。

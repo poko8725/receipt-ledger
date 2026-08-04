@@ -46,6 +46,22 @@ class NotPaidAmount(unittest.TestCase):
         text = "バージョンイベントに参加すると、合計で星玉×2,550を獲得できます"
         self.assertIsNone(extract_amount(text))
 
+    def test_レートは支払いではない(self):
+        # 広告の「◯円につき1マイル」。金額の形をしていて、件名に「支払」も入る。
+        text = "ANAマイレージモール経由でのお買い物で200円につき1マイルが貯まる！"
+        self.assertIsNone(extract_amount(text))
+
+    def test_ラベル付きでも回数は金額ではない(self):
+        # 「合計」が付くのでラベル優先の規則に強く当たるが、単位は回。
+        text = "期間中、無料で「十の導き」を5回、合計50回分の「導き」を行えます。"
+        self.assertIsNone(extract_amount(text))
+
+    def test_値引き前の定価は支払いではない(self):
+        # 「総額116,570円の品が 80,000 円」。ラベル付きで、通貨の後置を挟む。
+        text = "生豆8種類が合計4kg付いてお得！ 総額116,570円の品が 80,000 円"
+        got = extract_amount(text)
+        self.assertNotEqual(got and got[0], Decimal("116570"))
+
 
 class RealAmountSurvives(unittest.TestCase):
     """本物は落とさない。弾く側を強くしすぎると、静かに欠測する。"""

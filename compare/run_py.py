@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "cli"))
 from receipt_ledger.analyze import analyze  # noqa: E402
 from receipt_ledger.console import enable_utf8_output  # noqa: E402
 from receipt_ledger.report import csv_safe  # noqa: E402
-from receipt_ledger.rules import collapse_duplicates  # noqa: E402
+from receipt_ledger.rules import category_of, collapse_duplicates  # noqa: E402
 from receipt_ledger.sources.base import RawMessage  # noqa: E402
 
 
@@ -60,6 +60,8 @@ def run() -> dict[str, dict | None]:
             # 「そのメールが取引か」の判定。ここを出さないと、
             # 装置は解析結果だけを見て、弾く側の食い違いを見逃す。
             "non_transaction": record.non_transaction or "",
+            # 分類ルールは両実装に手で写しているので、ここも突き合わせる。
+            "category": category_of(record.merchant),
         }
         # CSV に書く直前の形。解析結果が同じでも、ここで割れれば
         # 片方の出力だけ数式として実行される。
