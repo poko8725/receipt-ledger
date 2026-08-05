@@ -570,6 +570,49 @@ def plan_rate_not_charge() -> bytes:
 
 
 
+def multi_item_total() -> bytes:
+    """1通に複数の課金が入り、明細のあとに合計が来る領収書。
+
+    ストアの領収書は1通にまとめて届くことがある。明細が先に並び、
+    最後に合計が置かれる。**HTML のセルを平文にすると、合計と金額の間に
+    空白と改行が数十文字入る。**
+
+    ラベル(合計)の読み飛ばし上限が空白まで数えていたため、上限を超えて
+    ラベル付きが不成立になり、裸の「¥650」(＝明細の1件目)を拾っていた。
+    例外は出ず、合計だけが静かに小さくなる。
+    実データでは Apple の領収書 401 通のうち 14 通、合計 ¥27,660 が欠けていた
+    (2026-08-05 に実測)。期待値は 3,850(=650+1,200+2,000)。
+
+    **なお「1通=1取引」の前提そのものは残っている。**この fixture が固定するのは
+    合計を取れることだけで、明細ごとに分ける話は別にある。
+    """
+    head = crlf(
+        "From: Example Store <no_reply@store.example>\n"
+        "To: user@example.com\n"
+        "Subject: =?UTF-8?B?44K544OI44Ki44GL44KJ44Gu6aCY5Y+O5pu444Gn44GZ?=\n"
+        "Date: Tue, 12 Aug 2025 06:44:29 +0000\n"
+        "Message-ID: <fixture-23@example.invalid>\n"
+        "Content-Type: text/html; charset=UTF-8\n"
+        "Content-Transfer-Encoding: 8bit\n"
+        "\n"
+    )
+    body = (
+        "<html><body><table>\n"
+        "  <tr><td>アプリA</td><td>問題を報告する</td><td>&yen;650</td></tr>\n"
+        "  <tr><td>アプリB</td><td>問題を報告する</td><td>&yen;1,200</td></tr>\n"
+        "  <tr><td>アプリC</td><td>問題を報告する</td><td>&yen;2,000</td></tr>\n"
+        "  <tr>\n"
+        "    <td>合計</td>\n"
+        "    <td>&nbsp;</td>\n"
+        "    <td>&nbsp;</td>\n"
+        "    <td>&nbsp;</td>\n"
+        "    <td>&yen;3,850</td>\n"
+        "  </tr>\n"
+        "</table></body></html>\n"
+    )
+    return head + body.encode("utf-8")
+
+
 FIXTURES = {
     "01-iso2022jp-escape.eml": iso2022jp_escape,
     "02-html-entity-amount.eml": html_entity_amount,
@@ -593,6 +636,7 @@ FIXTURES = {
     "20-processor-notice.eml": processor_notice,
     "21-merchant-side-receipt.eml": merchant_side_receipt,
     "22-plan-rate-not-charge.eml": plan_rate_not_charge,
+    "23-multi-item-total.eml": multi_item_total,
 }
 
 
