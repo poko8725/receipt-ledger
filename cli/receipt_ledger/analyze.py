@@ -135,19 +135,52 @@ def _html_to_text(raw: str) -> str:
     return html.unescape(text)
 
 
+def _part_text(msg: email.message.Message, want: str) -> str:
+    """multipart から最初の `want` パートを平文にして返す。無ければ空。"""
+    for part in msg.walk():
+        if part.get_content_type() != want:
+            continue
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        text = _decode_bytes(payload, part.get_content_charset())
+        return _html_to_text(text) if want == "text/html" else text
+    return ""
+
+
 def get_body_text(msg: email.message.Message) -> str:
-    """本文を取り出す。text/plain 優先、無ければ text/html をタグ除去。"""
+    """本文を取り出す。text/plain 優先。**金額が無ければ text/html も継ぎ足す。**
+
+    text/plain があればそこで返していたが、**同じメールの text/html にだけ
+    金額が入っている形がある。**Steam の購入確認がこれで、text/plain は
+
+        詳細を確認するには、https://store.steampowered.com/email/... をご覧ください
+
+    という案内だけ(3KB)、text/html(57KB)に品目・小計・消費税・合計・
+    インボイス番号・発行日が全部入っている。**片方のパートしか見ていなかった。**
+
+    `parsers/__init__.py` に「Steam はメール本文に明細が無く、リンク先の Web
+    ページにしかない」と対応不能として書いてあったが、**あれは誤り**で、
+    本文には最初から入っていた。読めなかったのはここの選び方のせいだった。
+
+    継ぎ足しであって差し替えではない。text/plain にしか無い情報を捨てないため。
+    金額が読めているときは html を触らない(大半が広告なので、通数に比例する
+    処理を増やさない)。
+
+    2026-08-08 の実測(Apple Mail 8,723 通)では、これで新たに読めたのが 216 通、
+    うち 152 通は非取引として弾かれ、証憑として残るのが 64 通。
+    内訳は Steam の購入確認 52・Amazon の注文確認 3 が本物で、
+    残り7件ほどは本文の `2022` を年号ではなく ¥2,022 と読むような誤りだった
+    (すべて 2023 年以前。金額抽出側の弱点で、ここで生まれたものではない)。
+    """
     if msg.is_multipart():
-        for want in ("text/plain", "text/html"):
-            for part in msg.walk():
-                if part.get_content_type() != want:
-                    continue
-                payload = part.get_payload(decode=True)
-                if not payload:
-                    continue
-                text = _decode_bytes(payload, part.get_content_charset())
-                return _html_to_text(text) if want == "text/html" else text
-        return ""
+        text = _part_text(msg, "text/plain")
+        if text and extract_amount(text) is not None:
+            return text
+        html_text = _part_text(msg, "text/html")
+        if not text:
+            return html_text
+        return f"{text}\n{html_text}" if html_text else text
 
     payload = msg.get_payload(decode=True)
     if payload is None:
